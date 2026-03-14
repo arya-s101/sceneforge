@@ -378,6 +378,18 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  align-self: stretch;
+}
+
+.workspace-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 4px;
+  background: linear-gradient(180deg, rgba(10, 10, 14, 0.96) 0%, rgba(10, 10, 14, 0.88) 80%, rgba(10, 10, 14, 0) 100%);
 }
 
 .workspace-alert {
@@ -455,6 +467,7 @@
   overflow: auto;
   border: 1px solid var(--glass-border);
   border-radius: 20px;
+  min-height: 280px;
 }
 
 .data-table {

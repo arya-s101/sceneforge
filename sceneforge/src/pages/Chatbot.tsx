@@ -27,6 +27,7 @@ const tabs = [
 ] as const
 
 type TabId = (typeof tabs)[number]['id']
+type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.'
@@ -200,26 +201,46 @@ const Chatbot: React.FC = () => {
   }, [chaosIndicator])
 
   const headerSandboxId = sandbox?.sandbox_id ?? 'No sandbox loaded'
-  const metrics = sandbox?.data.dashboard_metrics
+  const sandboxData = useMemo<LoadedSandboxData | null>(() => {
+    if (!sandbox?.data) {
+      return null
+    }
+
+    return {
+      users: Array.isArray(sandbox.data.users) ? sandbox.data.users : [],
+      transactions: Array.isArray(sandbox.data.transactions) ? sandbox.data.transactions : [],
+      activity_logs: Array.isArray(sandbox.data.activity_logs) ? sandbox.data.activity_logs : [],
+      feature_flags:
+        sandbox.data.feature_flags && typeof sandbox.data.feature_flags === 'object'
+          ? sandbox.data.feature_flags
+          : {},
+      dashboard_metrics: sandbox.data.dashboard_metrics,
+    }
+  }, [sandbox])
+  const metrics = sandboxData?.dashboard_metrics
 
   const activeTable = useMemo(() => {
-    if (!sandbox) {
+    if (!sandboxData) {
       return null
     }
 
     switch (activeTab) {
       case 'users':
-        return renderUsersTable(sandbox.data.users)
+        return renderUsersTable(sandboxData.users)
       case 'transactions':
-        return renderTransactionsTable(sandbox.data.transactions)
+        return renderTransactionsTable(sandboxData.transactions)
       case 'activity_logs':
-        return renderActivityLogsTable(sandbox.data.activity_logs)
+        return renderActivityLogsTable(sandboxData.activity_logs)
       case 'feature_flags':
-        return renderFeatureFlagsTable(sandbox.data.feature_flags)
+        return renderFeatureFlagsTable(sandboxData.feature_flags)
       default:
         return null
     }
-  }, [activeTab, sandbox])
+  }, [activeTab, sandboxData])
+
+  function appendPreviousPrompt(prompt: string) {
+    setPreviousPrompts((current) => [...current, prompt])
+  }
 
   async function handleSubmit() {
     const description = inputText.trim()
@@ -236,7 +257,7 @@ const Chatbot: React.FC = () => {
       const result = await generateSandbox(description)
       setSandbox(result)
       setActiveTab('users')
-      setPreviousPrompts((current) => [description, ...current.filter((item) => item !== description)])
+      appendPreviousPrompt(description)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
@@ -381,42 +402,44 @@ const Chatbot: React.FC = () => {
               <h2>Forging your sandbox...</h2>
               <p className="workspace-subtitle">Generating coherent users, transactions, activity logs, and flags from your prompt.</p>
             </div>
-          ) : sandbox ? (
+          ) : sandboxData ? (
             <div className="workspace-panel">
               {errorMessage ? <div className="workspace-alert error">{errorMessage}</div> : null}
 
-              {metrics ? (
-                <div className="metrics-grid">
-                  <div className="metric-card glass">
-                    <span className="metric-label">Total Revenue</span>
-                    <strong>${metrics.total_revenue.toFixed(2)}</strong>
+              <div className="workspace-toolbar">
+                {metrics ? (
+                  <div className="metrics-grid">
+                    <div className="metric-card glass">
+                      <span className="metric-label">Total Revenue</span>
+                      <strong>${metrics.total_revenue.toFixed(2)}</strong>
+                    </div>
+                    <div className="metric-card glass">
+                      <span className="metric-label">Active Users</span>
+                      <strong>{metrics.active_users}</strong>
+                    </div>
+                    <div className="metric-card glass">
+                      <span className="metric-label">Failed Transactions</span>
+                      <strong>{metrics.failed_transactions}</strong>
+                    </div>
+                    <div className="metric-card glass">
+                      <span className="metric-label">Anomaly Score</span>
+                      <strong>{metrics.anomaly_score}</strong>
+                    </div>
                   </div>
-                  <div className="metric-card glass">
-                    <span className="metric-label">Active Users</span>
-                    <strong>{metrics.active_users}</strong>
-                  </div>
-                  <div className="metric-card glass">
-                    <span className="metric-label">Failed Transactions</span>
-                    <strong>{metrics.failed_transactions}</strong>
-                  </div>
-                  <div className="metric-card glass">
-                    <span className="metric-label">Anomaly Score</span>
-                    <strong>{metrics.anomaly_score}</strong>
-                  </div>
-                </div>
-              ) : null}
+                ) : null}
 
-              <div className="tab-row">
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-                    onClick={() => setActiveTab(tab.id)}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+                <div className="tab-row">
+                  {tabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+                      onClick={() => setActiveTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="table-shell glass">{activeTable}</div>
