@@ -33,8 +33,9 @@ const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. You will receive 
 For chaos_type "failed_payment":
 - Find 1-2 completed transactions and change their status to "failed"
 - Add metadata: {"reason": "insufficient_funds", "chaos_injected": true} to those transactions
-- Update the user who owns those transactions: change status to "payment_suspended"
+- When a payment fails, you MUST find the user whose id matches the failed transaction's user_id and change that user's status field from "active" to "payment_suspended". This is mandatory, not optional.
 - Add 2-3 new activity_log entries referencing the real failed transaction IDs and real user IDs
+- When adding new activity_log entries during chaos, you MUST use an existing transaction id from the transactions array — specifically the transaction you just marked as failed. Never invent new transaction IDs for chaos log entries.
 - Update dashboard_metrics: increase failed_transactions count, increase anomaly_score significantly
 
 For chaos_type "permission_conflict":

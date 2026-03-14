@@ -29,6 +29,15 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]['id']
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
+type ChaosHighlights = {
+  chaosType: string
+  users: string[]
+  transactions: string[]
+  activityLogs: string[]
+  featureFlags: string[]
+  totalChanges: number
+  changedTabs: number
+}
 
 const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
 
@@ -67,6 +76,45 @@ function formatChaosLabel(value: string): string {
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
+}
+
+function getChangedIds<T extends { id: string }>(beforeItems: T[], afterItems: T[]): string[] {
+  const beforeMap = new Map(beforeItems.map((item) => [item.id, JSON.stringify(item)]))
+
+  return afterItems
+    .filter((item) => !beforeMap.has(item.id) || beforeMap.get(item.id) !== JSON.stringify(item))
+    .map((item) => item.id)
+}
+
+function getChangedFeatureFlags(
+  beforeFlags: Record<string, boolean>,
+  afterFlags: Record<string, boolean>,
+): string[] {
+  return Object.entries(afterFlags)
+    .filter(([flag, enabled]) => beforeFlags[flag] !== enabled)
+    .map(([flag]) => flag)
+}
+
+function createChaosHighlights(
+  beforeData: LoadedSandboxData,
+  afterData: LoadedSandboxData,
+  chaosType: string,
+): ChaosHighlights {
+  const users = getChangedIds(beforeData.users, afterData.users)
+  const transactions = getChangedIds(beforeData.transactions, afterData.transactions)
+  const activityLogs = getChangedIds(beforeData.activity_logs, afterData.activity_logs)
+  const featureFlags = getChangedFeatureFlags(beforeData.feature_flags, afterData.feature_flags)
+  const counts = [users.length, transactions.length, activityLogs.length, featureFlags.length]
+
+  return {
+    chaosType,
+    users,
+    transactions,
+    activityLogs,
+    featureFlags,
+    totalChanges: counts.reduce((sum, count) => sum + count, 0),
+    changedTabs: counts.filter((count) => count > 0).length,
+  }
 }
 
 function getSandboxIdFromUrl(): string | null {
@@ -125,7 +173,7 @@ function savePromptToStorage(prompt: string): string[] {
   }
 }
 
-function renderUsersTable(users: UserRecord[]) {
+function renderUsersTable(users: UserRecord[], changedIds: string[]) {
   return (
     <table className="data-table">
       <thead>
@@ -140,7 +188,7 @@ function renderUsersTable(users: UserRecord[]) {
       </thead>
       <tbody>
         {users.map((user) => (
-          <tr key={user.id}>
+          <tr key={user.id} className={changedIds.includes(user.id) ? 'changed-row' : undefined}>
             <td>{user.id}</td>
             <td>{user.name}</td>
             <td>{user.email}</td>
@@ -154,7 +202,7 @@ function renderUsersTable(users: UserRecord[]) {
   )
 }
 
-function renderTransactionsTable(transactions: TransactionRecord[]) {
+function renderTransactionsTable(transactions: TransactionRecord[], changedIds: string[]) {
   return (
     <table className="data-table">
       <thead>
@@ -170,7 +218,7 @@ function renderTransactionsTable(transactions: TransactionRecord[]) {
       </thead>
       <tbody>
         {transactions.map((transaction) => (
-          <tr key={transaction.id}>
+          <tr key={transaction.id} className={changedIds.includes(transaction.id) ? 'changed-row' : undefined}>
             <td>{transaction.id}</td>
             <td>{transaction.user_id}</td>
             <td>${transaction.amount.toFixed(2)}</td>
@@ -185,7 +233,7 @@ function renderTransactionsTable(transactions: TransactionRecord[]) {
   )
 }
 
-function renderActivityLogsTable(activityLogs: ActivityLogRecord[]) {
+function renderActivityLogsTable(activityLogs: ActivityLogRecord[], changedIds: string[]) {
   return (
     <table className="data-table">
       <thead>
@@ -200,7 +248,7 @@ function renderActivityLogsTable(activityLogs: ActivityLogRecord[]) {
       </thead>
       <tbody>
         {activityLogs.map((log) => (
-          <tr key={log.id}>
+          <tr key={log.id} className={changedIds.includes(log.id) ? 'changed-row' : undefined}>
             <td>{log.id}</td>
             <td>{log.user_id}</td>
             <td>{log.transaction_id}</td>
@@ -214,7 +262,7 @@ function renderActivityLogsTable(activityLogs: ActivityLogRecord[]) {
   )
 }
 
-function renderFeatureFlagsTable(featureFlags: Record<string, boolean>) {
+function renderFeatureFlagsTable(featureFlags: Record<string, boolean>, changedFlags: string[]) {
   return (
     <table className="data-table">
       <thead>
@@ -225,7 +273,7 @@ function renderFeatureFlagsTable(featureFlags: Record<string, boolean>) {
       </thead>
       <tbody>
         {Object.entries(featureFlags).map(([flag, enabled]) => (
-          <tr key={flag}>
+          <tr key={flag} className={changedFlags.includes(flag) ? 'changed-row' : undefined}>
             <td>{flag}</td>
             <td>{enabled ? 'true' : 'false'}</td>
           </tr>
@@ -248,6 +296,7 @@ const Chatbot: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [chaosIndicator, setChaosIndicator] = useState<string | null>(null)
   const [expiredSandboxMessage, setExpiredSandboxMessage] = useState<string | null>(null)
+  const [chaosHighlights, setChaosHighlights] = useState<ChaosHighlights | null>(null)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -285,6 +334,7 @@ const Chatbot: React.FC = () => {
         }
 
         setSandbox(restoredSandbox)
+        setChaosHighlights(null)
         setActiveTab('users')
       } catch (error) {
         if (isCancelled) {
@@ -331,6 +381,15 @@ const Chatbot: React.FC = () => {
     }
   }, [sandbox])
   const metrics = sandboxData?.dashboard_metrics
+  const tabChangeCounts = useMemo(
+    () => ({
+      users: chaosHighlights?.users.length ?? 0,
+      transactions: chaosHighlights?.transactions.length ?? 0,
+      activity_logs: chaosHighlights?.activityLogs.length ?? 0,
+      feature_flags: chaosHighlights?.featureFlags.length ?? 0,
+    }),
+    [chaosHighlights],
+  )
 
   const activeTable = useMemo(() => {
     if (!sandboxData) {
@@ -339,17 +398,17 @@ const Chatbot: React.FC = () => {
 
     switch (activeTab) {
       case 'users':
-        return renderUsersTable(sandboxData.users)
+        return renderUsersTable(sandboxData.users, chaosHighlights?.users ?? [])
       case 'transactions':
-        return renderTransactionsTable(sandboxData.transactions)
+        return renderTransactionsTable(sandboxData.transactions, chaosHighlights?.transactions ?? [])
       case 'activity_logs':
-        return renderActivityLogsTable(sandboxData.activity_logs)
+        return renderActivityLogsTable(sandboxData.activity_logs, chaosHighlights?.activityLogs ?? [])
       case 'feature_flags':
-        return renderFeatureFlagsTable(sandboxData.feature_flags)
+        return renderFeatureFlagsTable(sandboxData.feature_flags, chaosHighlights?.featureFlags ?? [])
       default:
         return null
     }
-  }, [activeTab, sandboxData])
+  }, [activeTab, chaosHighlights, sandboxData])
 
   async function handleSubmit() {
     const description = inputText.trim()
@@ -362,6 +421,7 @@ const Chatbot: React.FC = () => {
     setStatusMessage(null)
     setChaosIndicator(null)
     setExpiredSandboxMessage(null)
+    setChaosHighlights(null)
 
     try {
       const result = await generateSandbox(description)
@@ -388,8 +448,11 @@ const Chatbot: React.FC = () => {
     const chaosType = chaosTypes[Math.floor(Math.random() * chaosTypes.length)]
 
     try {
+      const previousData = sandbox.data
       const result = await applyChaos(sandbox.sandbox_id, chaosType)
+      const nextHighlights = createChaosHighlights(previousData, result.data, result.chaos_applied)
       setSandbox(result)
+      setChaosHighlights(nextHighlights)
       setChaosIndicator(`Chaos injected: ${formatChaosLabel(result.chaos_applied)}`)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
@@ -429,6 +492,7 @@ const Chatbot: React.FC = () => {
     setStatusMessage(null)
     setChaosIndicator(null)
     setExpiredSandboxMessage(null)
+    setChaosHighlights(null)
     clearSandboxUrl()
   }
 
@@ -553,11 +617,20 @@ const Chatbot: React.FC = () => {
                       className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
                       onClick={() => setActiveTab(tab.id)}
                     >
-                      {tab.label}
+                      <span className="tab-label">{tab.label}</span>
+                      {tabChangeCounts[tab.id] > 0 ? (
+                        <span className="tab-badge">{tabChangeCounts[tab.id]}</span>
+                      ) : null}
                     </button>
                   ))}
                 </div>
               </div>
+
+              {chaosHighlights ? (
+                <div className="chaos-banner">
+                  {`Chaos injected: ${formatChaosLabel(chaosHighlights.chaosType)} — ${chaosHighlights.totalChanges} changes across ${chaosHighlights.changedTabs} tables`}
+                </div>
+              ) : null}
 
               <div className="table-shell glass">{activeTable}</div>
             </div>
