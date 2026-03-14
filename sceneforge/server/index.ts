@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 import {
   createSandboxRecord,
@@ -13,7 +13,7 @@ import { supabase } from './lib/supabase.ts'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
-const MODEL = 'claude-sonnet-4-20250514'
+const MODEL = 'gemini-1.5-pro'
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
 const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON with no markdown, no explanation, no code blocks — just raw JSON.
@@ -64,15 +64,14 @@ function ensureEnv(name: string): string {
   return value
 }
 
-function getAnthropicClient(): Anthropic {
-  return new Anthropic({
-    apiKey: ensureEnv('ANTHROPIC_API_KEY'),
-  })
-}
-
 function ensureSupabaseEnv(): void {
   ensureEnv('SUPABASE_URL')
   ensureEnv('SUPABASE_ANON_KEY')
+}
+
+function getGeminiModel() {
+  const genAI = new GoogleGenerativeAI(ensureEnv('GEMINI_API_KEY'))
+  return genAI.getGenerativeModel({ model: MODEL })
 }
 
 async function getMemoryRecord(): Promise<MemoryRow | null> {
@@ -138,29 +137,13 @@ async function getSandboxById(id: string): Promise<SandboxRow> {
   return data as SandboxRow
 }
 
-async function requestClaudeJson(systemPrompt: string, prompt: string): Promise<string> {
-  const anthropic = getAnthropicClient()
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 6400,
-    temperature: 0.2,
-    system: systemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-  })
-
-  const text = response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('\n')
-    .trim()
+async function requestModelJson(systemPrompt: string, prompt: string): Promise<string> {
+  const model = getGeminiModel()
+  const result = await model.generateContent(`${systemPrompt}\n\n${prompt}`)
+  const text = result.response.text().trim()
 
   if (!text) {
-    throw new Error('Claude returned an empty response.')
+    throw new Error('Gemini returned an empty response.')
   }
 
   return text
@@ -203,7 +186,7 @@ app.post(
       'Return only raw JSON.',
     ].join('\n\n')
 
-    const rawJson = await requestClaudeJson(GENERATE_SYSTEM_PROMPT, prompt)
+    const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt)
     const data = parseSandboxPayload(rawJson)
     const sandbox = createSandboxRecord(description, data)
 
@@ -243,7 +226,7 @@ app.post(
       'Return only raw JSON.',
     ].join('\n\n')
 
-    const rawJson = await requestClaudeJson(CHAOS_SYSTEM_PROMPT, prompt)
+    const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
     const data = parseSandboxPayload(rawJson)
 
     const { error } = await supabase
