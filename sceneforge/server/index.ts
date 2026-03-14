@@ -1,5 +1,11 @@
-import 'dotenv/config'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import dotenv from 'dotenv'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
+
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
 import OpenAI from 'openai'
