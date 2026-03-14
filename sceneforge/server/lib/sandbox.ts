@@ -44,6 +44,17 @@ export type SandboxData = {
   dashboard_metrics: DashboardMetrics
 }
 
+type ArrayLimits = {
+  minimum: number
+  maximum: number
+}
+
+type ParseSandboxOptions = {
+  userLimits?: ArrayLimits
+  transactionLimits?: ArrayLimits
+  activityLogLimits?: ArrayLimits
+}
+
 type RawRecord = Record<string, unknown>
 
 const DEFAULT_FEATURE_FLAGS = [
@@ -131,7 +142,7 @@ function buildFallbackUser(index: number, createdAt: string): UserRecord {
   }
 }
 
-function normalizeUsers(rawUsers: unknown[], baseTime: Date): UserRecord[] {
+function normalizeUsers(rawUsers: unknown[], baseTime: Date, limits: ArrayLimits): UserRecord[] {
   const mapped = rawUsers.map((value, index) => {
     const record = asRecord(value)
     const createdAt = parseDate(record.created_at, new Date(baseTime.getTime() + index * 3_600_000)).toISOString()
@@ -148,7 +159,9 @@ function normalizeUsers(rawUsers: unknown[], baseTime: Date): UserRecord[] {
     }
   })
 
-  return clampArray(mapped, 3, 5, (index) => buildFallbackUser(index, isoMinutesFrom(baseTime, index * 15)))
+  return clampArray(mapped, limits.minimum, limits.maximum, (index) =>
+    buildFallbackUser(index, isoMinutesFrom(baseTime, index * 15)),
+  )
 }
 
 function buildFallbackTransaction(index: number, users: UserRecord[], baseTime: Date): TransactionRecord {
@@ -169,7 +182,12 @@ function buildFallbackTransaction(index: number, users: UserRecord[], baseTime: 
   }
 }
 
-function normalizeTransactions(rawTransactions: unknown[], users: UserRecord[], baseTime: Date): TransactionRecord[] {
+function normalizeTransactions(
+  rawTransactions: unknown[],
+  users: UserRecord[],
+  baseTime: Date,
+  limits: ArrayLimits,
+): TransactionRecord[] {
   const userIds = new Set(users.map((user) => user.id))
 
   const mapped = rawTransactions.map((value, index) => {
@@ -188,7 +206,9 @@ function normalizeTransactions(rawTransactions: unknown[], users: UserRecord[], 
     }
   })
 
-  return clampArray(mapped, 10, 15, (index) => buildFallbackTransaction(index, users, baseTime))
+  return clampArray(mapped, limits.minimum, limits.maximum, (index) =>
+    buildFallbackTransaction(index, users, baseTime),
+  )
 }
 
 function buildFallbackLog(index: number, users: UserRecord[], transactions: TransactionRecord[], baseTime: Date): ActivityLogRecord {
@@ -210,6 +230,7 @@ function normalizeLogs(
   users: UserRecord[],
   transactions: TransactionRecord[],
   baseTime: Date,
+  limits: ArrayLimits,
 ): ActivityLogRecord[] {
   const userIds = new Set(users.map((user) => user.id))
   const transactionIds = new Set(transactions.map((transaction) => transaction.id))
@@ -233,7 +254,9 @@ function normalizeLogs(
     }
   })
 
-  return clampArray(mapped, 15, 20, (index) => buildFallbackLog(index, users, transactions, baseTime))
+  return clampArray(mapped, limits.minimum, limits.maximum, (index) =>
+    buildFallbackLog(index, users, transactions, baseTime),
+  )
     .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
     .map((log, index, logs) => {
       const transaction = transactions.find((item) => item.id === log.transaction_id)
@@ -291,20 +314,70 @@ function deriveDashboardMetrics(
   }
 }
 
-export function parseSandboxPayload(rawText: string): SandboxData {
+export function mergeSandboxData(existingData: SandboxData, nextData: SandboxData): SandboxData {
+  const mergedUsers = [...nextData.users]
+  const mergedTransactions = [...nextData.transactions]
+  const mergedLogs = [...nextData.activity_logs]
+
+  const nextUserIds = new Set(nextData.users.map((user) => user.id))
+  const nextTransactionIds = new Set(nextData.transactions.map((transaction) => transaction.id))
+  const nextLogIds = new Set(nextData.activity_logs.map((log) => log.id))
+
+  existingData.users.forEach((user) => {
+    if (!nextUserIds.has(user.id)) {
+      mergedUsers.push(user)
+    }
+  })
+
+  existingData.transactions.forEach((transaction) => {
+    if (!nextTransactionIds.has(transaction.id)) {
+      mergedTransactions.push(transaction)
+    }
+  })
+
+  existingData.activity_logs.forEach((log) => {
+    if (!nextLogIds.has(log.id)) {
+      mergedLogs.push(log)
+    }
+  })
+
+  return {
+    users: mergedUsers,
+    transactions: mergedTransactions,
+    activity_logs: mergedLogs.sort(
+      (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
+    ),
+    feature_flags: {
+      ...existingData.feature_flags,
+      ...nextData.feature_flags,
+    },
+    dashboard_metrics: nextData.dashboard_metrics,
+  }
+}
+
+export function parseSandboxPayload(rawText: string, options?: ParseSandboxOptions): SandboxData {
   const parsed = JSON.parse(rawText.trim()) as Record<string, unknown>
   const baseTime = new Date()
-  const users = normalizeUsers(Array.isArray(parsed.users) ? parsed.users : [], new Date(baseTime.getTime() - 8 * 3_600_000))
+  const userLimits = options?.userLimits ?? { minimum: 3, maximum: 5 }
+  const transactionLimits = options?.transactionLimits ?? { minimum: 10, maximum: 15 }
+  const activityLogLimits = options?.activityLogLimits ?? { minimum: 15, maximum: 20 }
+  const users = normalizeUsers(
+    Array.isArray(parsed.users) ? parsed.users : [],
+    new Date(baseTime.getTime() - 8 * 3_600_000),
+    userLimits,
+  )
   const transactions = normalizeTransactions(
     Array.isArray(parsed.transactions) ? parsed.transactions : [],
     users,
     new Date(baseTime.getTime() - 6 * 3_600_000),
+    transactionLimits,
   )
   const activityLogs = normalizeLogs(
     Array.isArray(parsed.activity_logs) ? parsed.activity_logs : [],
     users,
     transactions,
     new Date(baseTime.getTime() - 5 * 3_600_000),
+    activityLogLimits,
   )
   const featureFlags = normalizeFeatureFlags(parsed.feature_flags)
 

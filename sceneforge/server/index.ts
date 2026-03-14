@@ -6,6 +6,7 @@ import OpenAI from 'openai'
 import {
   createSandboxRecord,
   createTemplateRecord,
+  mergeSandboxData,
   parseSandboxPayload,
   type SandboxData,
 } from './lib/sandbox.ts'
@@ -27,14 +28,31 @@ The JSON must contain:
 
 CRITICAL: Every foreign key reference must be valid. user_id in transactions must be a real user id. transaction_id in activity_logs must be a real transaction id. Timestamps must be chronologically coherent. The data must tell a consistent story.`
 
-const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. Given an existing sandbox dataset and a chaos type, mutate the data to reflect a realistic edge case. Return the complete mutated dataset as pure JSON — same structure as input, no markdown, no explanation.
+const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. You will receive a complete sandbox dataset and a chaos type. Return the ENTIRE mutated dataset as pure JSON — same structure, every field, nothing omitted.
 
-The chaos must propagate consistently across ALL entities simultaneously:
-- If a payment fails: update the transaction status, add an activity log entry, update the user's status, update dashboard_metrics to reflect the anomaly
-- If a permission conflict: update the user's role, add audit log entries showing the conflict, flag relevant transactions
-- If a data anomaly: introduce inconsistency in metrics, add suspicious activity logs, update anomaly_score in dashboard_metrics
+For chaos_type "failed_payment":
+- Find 1-2 completed transactions and change their status to "failed"
+- Add metadata: {"reason": "insufficient_funds", "chaos_injected": true} to those transactions
+- Update the user who owns those transactions: change status to "payment_suspended"
+- Add 2-3 new activity_log entries referencing the real failed transaction IDs and real user IDs
+- Update dashboard_metrics: increase failed_transactions count, increase anomaly_score significantly
 
-CRITICAL: The chaos must appear in every relevant table simultaneously. It must feel like something that actually happened, not a random data change.`
+For chaos_type "permission_conflict":
+- Change one non-admin user's role to a conflicting value
+- Add activity_log entries showing unauthorized access attempts using real user IDs
+- Flag 1-2 transactions from that user as "under_review"
+- Update dashboard_metrics: increase anomaly_score
+
+For chaos_type "data_anomaly":
+- Introduce 2-3 transactions with suspicious amounts or duplicate IDs
+- Add activity_log entries flagging the anomaly with real references
+- Update dashboard_metrics: set anomaly_score above 8.0, increase failed_transactions
+
+CRITICAL RULES:
+- Return the complete dataset with ALL existing data plus mutations — never drop existing records
+- Every new activity_log entry MUST reference a real user_id and real transaction_id from the dataset
+- Mutations must appear in users, transactions, activity_logs, AND dashboard_metrics simultaneously
+- Never return partial data`
 
 type MemoryRow = {
   id: string
@@ -159,6 +177,23 @@ async function requestModelJson(systemPrompt: string, prompt: string): Promise<s
   return text
 }
 
+function getChaosParseOptions(existingData: SandboxData) {
+  return {
+    userLimits: {
+      minimum: existingData.users.length,
+      maximum: Math.max(existingData.users.length + 2, 6),
+    },
+    transactionLimits: {
+      minimum: existingData.transactions.length,
+      maximum: Math.max(existingData.transactions.length + 3, 18),
+    },
+    activityLogLimits: {
+      minimum: existingData.activity_logs.length,
+      maximum: Math.max(existingData.activity_logs.length + 3, 24),
+    },
+  }
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message
@@ -233,11 +268,13 @@ app.post(
       `Chaos type: ${chaosType}`,
       `Current sandbox description: ${sandbox.description}`,
       `Current sandbox data: ${JSON.stringify(sandbox.data)}`,
+      'Preserve every existing record and field while applying the required mutations.',
       'Return only raw JSON.',
     ].join('\n\n')
 
     const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
-    const data = parseSandboxPayload(rawJson)
+    const parsedData = parseSandboxPayload(rawJson, getChaosParseOptions(sandbox.data))
+    const data = mergeSandboxData(sandbox.data, parsedData)
 
     const { error } = await supabase
       .from('sandboxes')
