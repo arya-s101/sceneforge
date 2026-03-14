@@ -20,11 +20,9 @@ const port = Number(process.env.PORT ?? 3001)
 const MODEL = 'gpt-4o'
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
-const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine.
+const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON.
 
-Return pure JSON only. No markdown, no explanation, no code fences.
-
-Based on the user's description, infer the most appropriate domain, entity types, relationships, and field names for that domain.
+Based on the user's description, infer the most appropriate entity type and fields for their domain. Be specific and rich.
 
 Always return this top-level structure:
 {
@@ -39,16 +37,35 @@ Always return this top-level structure:
   }
 }
 
-Rules:
-- Keep "users" as the people, accounts, operators, customers, staff, or actors relevant to the scenario.
-- Put the domain's main business records in "primary_entities" and choose field names that feel natural for that domain.
-- Use "schema_info.primary_entity_name" to name those records for the UI.
-- Keep the audit trail chronological and make sure it references real ids from "users" and real ids from "primary_entities".
-- Make "feature_flags" and "dashboard_metrics" appropriate for the domain and consistent with the generated records.
-- Every foreign key reference must be valid.
-- Timestamps must be chronologically coherent.
-- Avoid generic schemas unless the user's prompt clearly calls for them.
-- Be creative, specific, and domain-appropriate.`
+Requirements for primary_entities:
+- Include a unique id field
+- Include at least 2-3 numeric fields relevant to the domain
+- Include a status field with realistic values for that domain
+- Include relevant timestamp fields
+- Include domain-specific categorical fields such as type, category, or priority when appropriate
+- Include foreign key fields that reference real user IDs from the users array
+
+Examples of good domain-specific numeric fields:
+- reports -> view_count, query_count, execution_time_ms
+- trips -> fare, distance_km, duration_mins
+- orders -> total_amount, item_count, discount_applied
+
+For a SaaS analytics platform, primary_entities should be reports or dashboards with fields like:
+id, owner_id, title, status, view_count, query_count, execution_time_ms, ai_suggestions_used, last_accessed, created_at
+
+For activity_logs:
+- Keep them chronological
+- Reference real ids from users and real ids from primary_entities
+- Make them reflect actions that could actually happen in the generated environment
+
+For dashboard_metrics:
+- Derive values from the actual generated data
+- Pick the most relevant numeric field as the primary metric
+- Count active vs inactive records
+- Count failed or error records
+- Set anomaly_score based on any anomalies in the data
+
+Return pure JSON, no markdown, no explanation.`
 
 const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. Given a sandbox dataset and a chaos type, return ONLY a JSON diff object describing exactly what to change. Do not return the full dataset.
 
