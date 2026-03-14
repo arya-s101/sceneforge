@@ -15,7 +15,7 @@
     "esm": true
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.99.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
