@@ -44,6 +44,7 @@ export type SandboxData = {
 export type SandboxResponse = {
   sandbox_id: string
   data: SandboxData
+  expires_at: string
 }
 
 export type TemplateSummary = {
@@ -138,11 +139,30 @@ export function generateFromTemplate(templateId: string) {
 }
 
 export function getSandbox(sandboxId: string) {
-  return apiRequest<{
-    id: string
-    data: SandboxData
-  }>(`/api/sandbox/${sandboxId}`).then((payload) => ({
-    sandbox_id: payload.id,
-    data: payload.data,
-  }))
+  return fetch(`${API_URL}/api/sandbox/${sandboxId}`)
+    .then(async (response) => {
+      const payload = (await response.json().catch(() => ({ error: 'Invalid server response.' }))) as
+        | {
+            expired?: boolean
+            error?: string
+            id?: string
+            data?: SandboxData
+            expires_at?: string
+          }
+        | { error?: string }
+
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error ?? 'Request failed.')
+      }
+
+      if ('expired' in payload && payload.expired) {
+        throw new Error('Sandbox expired')
+      }
+
+      return {
+        sandbox_id: payload.id ?? sandboxId,
+        data: payload.data as SandboxData,
+        expires_at: payload.expires_at ?? '',
+      }
+    })
 }

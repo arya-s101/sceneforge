@@ -43,6 +43,7 @@ type PreviousPromptItem = {
   timestamp: number
 }
 type TableRow = Record<string, unknown>
+type ViewingRole = UserRecord['role']
 
 const TEMPLATE_CACHE_STORAGE_KEY = 'sceneforge_templates_cache'
 const PINNED_COLUMNS = [
@@ -153,6 +154,20 @@ function formatMetricValue(value: number): string {
     minimumFractionDigits: hasFraction ? 2 : 0,
     maximumFractionDigits: hasFraction ? 2 : 2,
   })
+}
+
+function getTimeRemaining(expiresAt: string) {
+  const diff = new Date(expiresAt).getTime() - Date.now()
+  if (diff <= 0) return 'Expired'
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+  return `${hours}h ${minutes}m remaining`
+}
+
+function getRelatedUserIdsFromEntity(entity: PrimaryEntityRecord): string[] {
+  return Object.entries(entity)
+    .filter(([key, value]) => key.endsWith('_id') && key !== 'id' && typeof value === 'string')
+    .map(([, value]) => value as string)
 }
 
 function renderSkeletonTableRows(rowCount = 8, columnCount = 6) {
@@ -384,6 +399,9 @@ const Chatbot: React.FC = () => {
   const [templateName, setTemplateName] = useState('')
   const [isCopyLinkSuccess, setIsCopyLinkSuccess] = useState(false)
   const [isChaosButtonFlashing, setIsChaosButtonFlashing] = useState(false)
+  const [timeRemaining, setTimeRemaining] = useState<string | null>(null)
+  const [selectedViewingUserId, setSelectedViewingUserId] = useState<string>('')
+  const [isChaosBannerDismissed, setIsChaosBannerDismissed] = useState(false)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -424,6 +442,29 @@ const Chatbot: React.FC = () => {
 
     return () => window.clearTimeout(timeoutId)
   }, [isChaosButtonFlashing])
+
+  useEffect(() => {
+    if (!sandbox?.expires_at) {
+      setTimeRemaining(null)
+      return undefined
+    }
+
+    const updateRemaining = () => {
+      const nextRemaining = getTimeRemaining(sandbox.expires_at)
+      setTimeRemaining(nextRemaining)
+
+      if (nextRemaining === 'Expired') {
+        setSandbox(null)
+        setExpiredSandboxMessage('This sandbox has expired')
+        clearSandboxUrl()
+      }
+    }
+
+    updateRemaining()
+    const intervalId = window.setInterval(updateRemaining, 60_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [sandbox?.expires_at])
 
   const loadSidebarData = useCallback(async () => {
     setIsLoadingPrompts(true)
@@ -520,6 +561,30 @@ const Chatbot: React.FC = () => {
     }
   }, [sandbox])
   const metrics = sandboxData?.dashboard_metrics
+  const viewingUsers = useMemo(() => sandboxData?.users ?? [], [sandboxData])
+  const selectedViewingUser = useMemo(
+    () => viewingUsers.find((user) => user.id === selectedViewingUserId) ?? null,
+    [selectedViewingUserId, viewingUsers],
+  )
+  const currentViewingRole: ViewingRole = selectedViewingUser?.role ?? 'admin'
+
+  useEffect(() => {
+    if (!viewingUsers.length) {
+      setSelectedViewingUserId('')
+      return
+    }
+
+    const hasSelectedUser = viewingUsers.some((user) => user.id === selectedViewingUserId)
+    if (hasSelectedUser) {
+      return
+    }
+
+    const preferredUser =
+      viewingUsers.find((user) => user.role === 'admin') ??
+      viewingUsers[0]
+
+    setSelectedViewingUserId(preferredUser.id)
+  }, [selectedViewingUserId, viewingUsers])
   const changedRowIdSet = useMemo(() => new Set(changedRowIds), [changedRowIds])
   const tabChangeCounts = useMemo(
     () => ({
@@ -536,19 +601,37 @@ const Chatbot: React.FC = () => {
       return null
     }
 
+    const analystPrimaryEntities = currentViewingRole === 'analyst' && selectedViewingUser
+      ? sandboxData.primary_entities.filter((entity) =>
+          getRelatedUserIdsFromEntity(entity).includes(selectedViewingUser.id),
+        )
+      : sandboxData.primary_entities
+    const allowedPrimaryEntityIds = new Set(analystPrimaryEntities.map((entity) => entity.id))
+    const analystActivityLogs = currentViewingRole === 'analyst' && selectedViewingUser
+      ? sandboxData.activity_logs.filter(
+          (log) =>
+            log.user_id === selectedViewingUser.id ||
+            allowedPrimaryEntityIds.has(log.primary_entity_id),
+        )
+      : sandboxData.activity_logs
+
+    if (currentViewingRole === 'viewer' && (activeTab === 'users' || activeTab === 'activity_logs')) {
+      return <div className="access-restricted-panel">Access Restricted</div>
+    }
+
     switch (activeTab) {
       case 'users':
         return renderUsersTable(sandboxData.users, Array.from(changedRowIdSet))
       case 'primary_entities':
-        return renderPrimaryEntitiesTable(sandboxData.primary_entities, Array.from(changedRowIdSet))
+        return renderPrimaryEntitiesTable(analystPrimaryEntities, Array.from(changedRowIdSet))
       case 'activity_logs':
-        return renderActivityLogsTable(sandboxData.activity_logs, Array.from(changedRowIdSet))
+        return renderActivityLogsTable(analystActivityLogs, Array.from(changedRowIdSet))
       case 'feature_flags':
         return renderFeatureFlagsTable(sandboxData.feature_flags, changedFeatureFlags)
       default:
         return null
     }
-  }, [activeTab, changedFeatureFlags, changedRowIdSet, sandboxData])
+  }, [activeTab, changedFeatureFlags, changedRowIdSet, currentViewingRole, sandboxData, selectedViewingUser])
 
   async function handleCopyLink() {
     if (!sandbox) {
@@ -578,6 +661,7 @@ const Chatbot: React.FC = () => {
     setChangedRowIds([])
     setChangedFeatureFlags([])
     setIsTemplateFormOpen(false)
+    setIsChaosBannerDismissed(false)
 
     try {
       const result = await generateSandbox(description)
@@ -628,6 +712,7 @@ const Chatbot: React.FC = () => {
       setChangedFeatureFlags([])
       setChaosIndicator(result.chaos_summary)
       setIsChaosButtonFlashing(true)
+      setIsChaosBannerDismissed(false)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
@@ -741,6 +826,8 @@ const Chatbot: React.FC = () => {
     setChangedFeatureFlags([])
     setIsTemplateFormOpen(false)
     setTemplateName('')
+    setTimeRemaining(null)
+    setSelectedViewingUserId('')
     clearSandboxUrl()
   }
 
@@ -854,7 +941,7 @@ const Chatbot: React.FC = () => {
         </div>
       </aside>
 
-      <main className="chat-main">
+      <main className={`chat-main ${expiredSandboxMessage && !sandboxData ? 'chat-main-expired' : ''}`}>
         <header className="chat-header glass">
           <div className="chat-header-copy">
             <div className="header-title-row">
@@ -870,6 +957,34 @@ const Chatbot: React.FC = () => {
                 {isCopyLinkSuccess ? 'Copied!' : 'Copy Link'}
               </button>
             </div>
+            {sandbox?.expires_at ? (
+              <span className={`expiry-indicator ${timeRemaining === 'Expired' ? 'expired' : ''}`}>
+                {timeRemaining === 'Expired' ? 'Expired' : `Expires in: ${timeRemaining}`}
+              </span>
+            ) : null}
+            {sandboxData && selectedViewingUser ? (
+              <div className="viewing-controls">
+                <label className="viewing-label" htmlFor="viewing-user-select">
+                  Viewing as:
+                </label>
+                <select
+                  id="viewing-user-select"
+                  className="viewing-select"
+                  value={selectedViewingUserId}
+                  onChange={(event) => setSelectedViewingUserId(event.target.value)}
+                >
+                  {viewingUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {`${user.name} (${user.role})`}
+                    </option>
+                  ))}
+                </select>
+                <span className={`role-badge ${currentViewingRole}`}>{capitalizeLabel(currentViewingRole)}</span>
+                {chaosHighlights && currentViewingRole !== 'admin' ? (
+                  <span className="role-alert-badge">Anomaly detected</span>
+                ) : null}
+              </div>
+            ) : null}
             {chaosIndicator ? <span className="chaos-indicator">{chaosIndicator}</span> : null}
             {statusMessage ? <span className="status-indicator">{statusMessage}</span> : null}
           </div>
@@ -983,11 +1098,13 @@ const Chatbot: React.FC = () => {
 
                 <div className="tab-row">
                   {[
-                    { id: 'users' as const, label: 'Users' },
-                    { id: 'primary_entities' as const, label: primaryEntityTabLabel },
-                    { id: 'activity_logs' as const, label: 'Activity Logs' },
-                    { id: 'feature_flags' as const, label: 'Feature Flags' },
-                  ].map((tab) => (
+                    { id: 'users' as const, label: 'Users', hidden: currentViewingRole === 'viewer' },
+                    { id: 'primary_entities' as const, label: primaryEntityTabLabel, hidden: false },
+                    { id: 'activity_logs' as const, label: 'Activity Logs', hidden: currentViewingRole === 'viewer' },
+                    { id: 'feature_flags' as const, label: 'Feature Flags', hidden: false },
+                  ]
+                    .filter((tab) => !tab.hidden)
+                    .map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
@@ -1003,9 +1120,19 @@ const Chatbot: React.FC = () => {
                 </div>
               </div>
 
-              {chaosHighlights ? (
+              {chaosHighlights && !isChaosBannerDismissed ? (
                 <div className="chaos-banner">
-                  {`${chaosHighlights.chaosSummary} — ${chaosHighlights.totalChanges} changes across ${chaosHighlights.changedTabs} tables`}
+                  <span className="chaos-banner-text">
+                    {`${chaosHighlights.chaosSummary} — ${chaosHighlights.totalChanges} changes across ${chaosHighlights.changedTabs} tables`}
+                  </span>
+                  <button
+                    type="button"
+                    className="chaos-banner-dismiss"
+                    onClick={() => setIsChaosBannerDismissed(true)}
+                    aria-label="Dismiss chaos banner"
+                  >
+                    ×
+                  </button>
                 </div>
               ) : null}
 
@@ -1016,7 +1143,7 @@ const Chatbot: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="empty-state">
+            <div className={`empty-state ${expiredSandboxMessage ? 'expired-state' : ''}`}>
               <div className="empty-icon glass">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
@@ -1029,6 +1156,11 @@ const Chatbot: React.FC = () => {
                   : 'Describe the demo or QA environment you want to generate, then inspect the resulting entities in structured tabs.'}
               </p>
               {errorMessage ? <div className="workspace-alert error compact">{errorMessage}</div> : null}
+              {expiredSandboxMessage ? (
+                <button type="button" className="new-chat-btn expired-reset-btn" onClick={handleReset}>
+                  Create New Sandbox
+                </button>
+              ) : null}
               <div className="example-grid">
                 {examplePrompts.map((prompt, index) => (
                   <button

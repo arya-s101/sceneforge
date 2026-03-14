@@ -485,6 +485,7 @@ app.post(
     response.status(201).json({
       sandbox_id: sandbox.id,
       data: sandbox.data,
+      expires_at: sandbox.expires_at,
     })
   }),
 )
@@ -547,6 +548,7 @@ app.post(
     response.status(201).json({
       sandbox_id: sandbox.id,
       data: sandbox.data,
+      expires_at: sandbox.expires_at,
     })
   }),
 )
@@ -591,6 +593,7 @@ app.post(
     response.json({
       sandbox_id: sandboxId,
       data: mutatedData,
+      expires_at: sandbox.expires_at,
       changedIds,
       chaos_summary,
     })
@@ -630,6 +633,13 @@ app.get(
     ensureSupabaseEnv()
     const sandboxId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id
     const sandbox = await getSandboxById(sandboxId)
+
+    if (new Date(sandbox.expires_at).getTime() <= Date.now()) {
+      response.json({
+        expired: true,
+      })
+      return
+    }
 
     response.json(sandbox)
   }),
