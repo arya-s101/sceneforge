@@ -15,7 +15,15 @@ export type ActivityLogRecord = Record<string, unknown> & {
   primary_entity_id: string
 }
 
-export type DashboardMetrics = Record<string, unknown>
+export type DashboardMetrics = Record<string, unknown> & {
+  primary_metric: number
+  primary_metric_label: string
+  active_users: number
+  failed_records: number
+  anomaly_score: number
+  active_records?: number
+  inactive_records?: number
+}
 
 export type SandboxData = {
   users: UserRecord[]
@@ -140,18 +148,85 @@ function normalizeActivityLogs(
     }))
 }
 
+function isFailureStatus(value: unknown): boolean {
+  return typeof value === 'string' && /failed|error|closed_lost|blocked|denied|degraded/i.test(value)
+}
+
+function isActiveStatus(value: unknown): boolean {
+  return typeof value === 'string' && /active|open|healthy|running|completed/i.test(value)
+}
+
+function isInactiveStatus(value: unknown): boolean {
+  return typeof value === 'string' && /inactive|archived|disabled|closed|failed|error|degraded|lost/i.test(value)
+}
+
+function findNumericField(primaryEntities: PrimaryEntityRecord[]): string | null {
+  for (const entity of primaryEntities) {
+    for (const [key, value] of Object.entries(entity)) {
+      if (key !== 'id' && typeof value === 'number' && Number.isFinite(value)) {
+        return key
+      }
+    }
+  }
+
+  return null
+}
+
+function deriveDashboardMetrics(
+  primaryEntities: PrimaryEntityRecord[],
+  users: UserRecord[],
+  existingMetrics: Record<string, unknown>,
+): DashboardMetrics {
+  const numericField = findNumericField(primaryEntities)
+  const derivedPrimaryMetric = numericField
+    ? primaryEntities.reduce((sum, entity) => sum + (Number(entity[numericField]) || 0), 0)
+    : 0
+
+  const activeUsers = users.filter((user) => user.status === 'active').length
+  const failedRecords = primaryEntities.filter((entity) => isFailureStatus(entity.status)).length
+  const activeRecords = primaryEntities.filter((entity) => isActiveStatus(entity.status)).length
+  const inactiveRecords = primaryEntities.filter((entity) => isInactiveStatus(entity.status)).length
+  const currentAnomalyScore =
+    typeof existingMetrics.anomaly_score === 'number' && Number.isFinite(existingMetrics.anomaly_score)
+      ? existingMetrics.anomaly_score
+      : undefined
+
+  return {
+    ...existingMetrics,
+    primary_metric:
+      typeof existingMetrics.primary_metric === 'number' && existingMetrics.primary_metric !== 0
+        ? existingMetrics.primary_metric
+        : derivedPrimaryMetric,
+    primary_metric_label:
+      typeof existingMetrics.primary_metric_label === 'string' && existingMetrics.primary_metric_label.trim()
+        ? existingMetrics.primary_metric_label.trim()
+        : numericField ?? 'total',
+    active_users: activeUsers,
+    failed_records: failedRecords,
+    anomaly_score: currentAnomalyScore && currentAnomalyScore !== 0
+      ? currentAnomalyScore
+      : failedRecords > 0
+        ? Number((failedRecords / Math.max(primaryEntities.length, 1)).toFixed(2))
+        : 0.1,
+    active_records: activeRecords,
+    inactive_records: inactiveRecords,
+  }
+}
+
 export function parseSandboxPayload(rawText: string): SandboxData {
   const parsed = JSON.parse(rawText.trim()) as Record<string, unknown>
   const users = normalizeUsers(parsed.users)
   const primaryEntities = normalizePrimaryEntities(parsed.primary_entities, users)
   const activityLogs = normalizeActivityLogs(parsed.activity_logs, users, primaryEntities)
+  const existingMetrics = asRecord(parsed.dashboard_metrics)
+  const dashboardMetrics = deriveDashboardMetrics(primaryEntities, users, existingMetrics)
 
   return {
     users,
     primary_entities: primaryEntities,
     activity_logs: activityLogs,
     feature_flags: asRecord(parsed.feature_flags),
-    dashboard_metrics: asRecord(parsed.dashboard_metrics),
+    dashboard_metrics: dashboardMetrics,
     schema_info: {
       primary_entity_name:
         typeof asRecord(parsed.schema_info).primary_entity_name === 'string'

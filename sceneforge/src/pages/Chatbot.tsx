@@ -83,29 +83,64 @@ function normalizeDashboardMetrics(metrics: unknown) {
       ? (metrics as Record<string, unknown>)
       : {}
 
-  const totalValue =
-    typeof record.total_value === 'number'
-      ? record.total_value
-      : typeof record.total_revenue === 'number'
-        ? record.total_revenue
-        : 0
+  const primaryMetric =
+    typeof record.primary_metric === 'number'
+      ? record.primary_metric
+      : typeof record.total_value === 'number'
+        ? record.total_value
+        : typeof record.total_revenue === 'number'
+          ? record.total_revenue
+          : 0
+
+  const primaryMetricLabel =
+    typeof record.primary_metric_label === 'string'
+      ? record.primary_metric_label
+      : typeof record.total_value === 'number' || typeof record.total_revenue === 'number'
+        ? 'value'
+        : 'total'
 
   const activeUsers = typeof record.active_users === 'number' ? record.active_users : 0
-  const failedEntities =
-    typeof record.failed_entities === 'number'
-      ? record.failed_entities
-      : typeof record.failed_transactions === 'number'
-        ? record.failed_transactions
-        : 0
+  const failedRecords =
+    typeof record.failed_records === 'number'
+      ? record.failed_records
+      : typeof record.failed_entities === 'number'
+        ? record.failed_entities
+        : typeof record.failed_transactions === 'number'
+          ? record.failed_transactions
+          : 0
 
   const anomalyScore = typeof record.anomaly_score === 'number' ? record.anomaly_score : 0
 
   return {
-    total_value: totalValue,
+    primary_metric: primaryMetric,
+    primary_metric_label: primaryMetricLabel,
     active_users: activeUsers,
-    failed_entities: failedEntities,
+    failed_records: failedRecords,
     anomaly_score: anomalyScore,
   }
+}
+
+function formatMetricLabel(value: string): string {
+  const normalized = value.trim().replace(/_usd$/i, '').replace(/\s+/g, '_')
+  const pretty = capitalizeLabel(normalized)
+
+  if (!pretty) {
+    return 'Total'
+  }
+
+  return /^total\b/i.test(pretty) ? pretty : `Total ${pretty}`
+}
+
+function formatMetricValue(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0'
+  }
+
+  const hasFraction = Math.abs(value % 1) > 0
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: hasFraction ? 2 : 2,
+  })
 }
 
 function getOrderedColumns(rows: TableRow[]): string[] {
@@ -675,16 +710,16 @@ const Chatbot: React.FC = () => {
                 {metrics ? (
                   <div className="metrics-grid">
                     <div className="metric-card glass">
-                      <span className="metric-label">Total Value</span>
-                      <strong>{metrics.total_value.toFixed(2)}</strong>
+                      <span className="metric-label">{formatMetricLabel(metrics.primary_metric_label)}</span>
+                      <strong>{formatMetricValue(metrics.primary_metric)}</strong>
                     </div>
                     <div className="metric-card glass">
                       <span className="metric-label">Active Users</span>
                       <strong>{metrics.active_users}</strong>
                     </div>
                     <div className="metric-card glass">
-                      <span className="metric-label">Failed Records</span>
-                      <strong>{metrics.failed_entities}</strong>
+                      <span className="metric-label">{`${primaryEntityTabLabel} Issues`}</span>
+                      <strong>{metrics.failed_records}</strong>
                     </div>
                     <div className="metric-card glass">
                       <span className="metric-label">Anomaly Score</span>

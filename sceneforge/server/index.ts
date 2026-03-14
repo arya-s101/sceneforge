@@ -248,44 +248,44 @@ function getRelatedUserIds(record: PrimaryEntityRecord, validUserIds: Set<string
 }
 
 function deriveDashboardMetrics(data: SandboxData): SandboxData['dashboard_metrics'] {
-  const totalValue = data.primary_entities.reduce((sum, entity) => {
-    if (hasFailureStatus(entity.status)) {
-      return sum
-    }
+  let numericField: string | null = null
 
-    const preferredKeys = [
-      'value',
-      'revenue',
-      'cost',
-      'spend',
-      'order_value',
-      'visit_value',
-      'trip_value',
-      'usage_credits',
-      'query_count',
-      'seat_count',
-    ]
-
-    for (const key of preferredKeys) {
-      if (typeof entity[key] === 'number' && Number.isFinite(entity[key])) {
-        return sum + (entity[key] as number)
+  for (const entity of data.primary_entities) {
+    for (const [key, value] of Object.entries(entity)) {
+      if (key !== 'id' && typeof value === 'number' && Number.isFinite(value)) {
+        numericField = key
+        break
       }
     }
+    if (numericField) {
+      break
+    }
+  }
 
-    return sum
-  }, 0)
+  const primaryMetric = numericField
+    ? data.primary_entities.reduce((sum, entity) => sum + (Number(entity[numericField]) || 0), 0)
+    : 0
 
-  const activeUsers = data.users.filter((user) => /active/i.test(user.status)).length
+  const activeUsers = data.users.filter((user) => user.status === 'active').length
   const failedEntities = data.primary_entities.filter((entity) => hasFailureStatus(entity.status)).length
+  const activeRecords = data.primary_entities.filter((entity) =>
+    typeof entity.status === 'string' && /active|open|healthy|running|completed/i.test(entity.status),
+  ).length
+  const inactiveRecords = data.primary_entities.filter((entity) =>
+    typeof entity.status === 'string' && /inactive|archived|disabled|closed|failed|error|degraded|lost/i.test(entity.status),
+  ).length
   const suspiciousLogs = data.activity_logs.filter((log) =>
     /fail|conflict|anomaly|alert|suspicious|degrad|incident/i.test(`${log.action} ${log.details}`),
   ).length
 
   return {
-    total_value: Number(totalValue.toFixed(2)),
+    primary_metric: Number(primaryMetric.toFixed(2)),
+    primary_metric_label: numericField ?? 'total',
     active_users: activeUsers,
-    failed_entities: failedEntities,
+    failed_records: failedEntities,
     anomaly_score: Number((((failedEntities * 10) + suspiciousLogs * 3) / Math.max(data.activity_logs.length, 1)).toFixed(2)),
+    active_records: activeRecords,
+    inactive_records: inactiveRecords,
   }
 }
 

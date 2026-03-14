@@ -26,10 +26,13 @@ export type SandboxData = {
   activity_logs: ActivityLogRecord[]
   feature_flags: Record<string, boolean>
   dashboard_metrics: {
-    total_value: number
+    primary_metric: number
+    primary_metric_label: string
     active_users: number
-    failed_entities: number
+    failed_records: number
     anomaly_score: number
+    active_records?: number
+    inactive_records?: number
   }
   schema_info: {
     primary_entity_name: string
