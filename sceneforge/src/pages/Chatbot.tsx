@@ -43,8 +43,23 @@ type PreviousPromptItem = {
   sandbox_id: string
   timestamp: number
 }
+type TableRow = Record<string, unknown>
 
 const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
+const PINNED_COLUMNS = [
+  'id',
+  'user_id',
+  'transaction_id',
+  'name',
+  'email',
+  'role',
+  'status',
+  'amount',
+  'type',
+  'action',
+  'timestamp',
+  'created_at',
+] as const
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.'
@@ -60,20 +75,82 @@ function formatDate(value: string): string {
   return parsed.toLocaleString()
 }
 
-function formatValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return value
+function getOrderedColumns(rows: TableRow[]): string[] {
+  const discoveredColumns: string[] = []
+
+  rows.forEach((row) => {
+    Object.keys(row).forEach((key) => {
+      if (!discoveredColumns.includes(key)) {
+        discoveredColumns.push(key)
+      }
+    })
+  })
+
+  const pinnedColumns = PINNED_COLUMNS.filter((key) => discoveredColumns.includes(key))
+  const remainingColumns = discoveredColumns.filter((key) => !PINNED_COLUMNS.includes(key))
+
+  return [...pinnedColumns, ...remainingColumns]
+}
+
+function renderCellValue(value: unknown) {
+  if (Array.isArray(value) || (value !== null && typeof value === 'object')) {
+    const fullValue = JSON.stringify(value)
+    const condensedValue =
+      fullValue.length > 40 ? `${fullValue.slice(0, 40).trimEnd()}...` : fullValue
+
+    return (
+      <span className="cell-truncated-value" title={fullValue}>
+        {condensedValue}
+      </span>
+    )
+  }
+
+  if (typeof value === 'string' && /(timestamp|created_at)/i.test(value)) {
+    return formatDate(value)
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value)
   }
 
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || value === '') {
     return '—'
   }
 
-  return JSON.stringify(value)
+  return value
+}
+
+function renderDataTable(rows: TableRow[], changedIds: string[]) {
+  const columns = getOrderedColumns(rows)
+
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          {columns.map((column) => (
+            <th key={column}>{column}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, index) => {
+          const rowId = typeof row.id === 'string' ? row.id : undefined
+          const isChanged = rowId ? changedIds.includes(rowId) : false
+
+          return (
+            <tr
+              key={`${rowId ?? 'row'}-${index}`}
+              className={isChanged ? 'changed-row' : undefined}
+            >
+              {columns.map((column) => (
+                <td key={`${column}-${index}`}>{renderCellValue(row[column])}</td>
+              ))}
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
 }
 
 function createChaosHighlights(
@@ -198,115 +275,31 @@ function savePromptToStorage(prompt: string, sandboxId: string): PreviousPromptI
 }
 
 function renderUsersTable(users: UserRecord[], changedIds: string[]) {
-  return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Email</th>
-          <th>Role</th>
-          <th>Status</th>
-          <th>Created</th>
-        </tr>
-      </thead>
-      <tbody>
-        {users.map((user, index) => (
-          <tr key={`${user.id}-${index}`} className={changedIds.includes(user.id) ? 'changed-row' : undefined}>
-            <td>{user.id}</td>
-            <td>{user.name}</td>
-            <td>{user.email}</td>
-            <td>{user.role}</td>
-            <td>{user.status}</td>
-            <td>{formatDate(user.created_at)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
+  return renderDataTable(users as unknown as TableRow[], changedIds)
 }
 
 function renderTransactionsTable(transactions: TransactionRecord[], changedIds: string[]) {
-  return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>User ID</th>
-          <th>Amount</th>
-          <th>Status</th>
-          <th>Type</th>
-          <th>Created</th>
-          <th>Metadata</th>
-        </tr>
-      </thead>
-      <tbody>
-        {transactions.map((transaction, index) => (
-          <tr
-            key={`${transaction.id}-${index}`}
-            className={changedIds.includes(transaction.id) ? 'changed-row' : undefined}
-          >
-            <td>{transaction.id}</td>
-            <td>{transaction.user_id}</td>
-            <td>${transaction.amount.toFixed(2)}</td>
-            <td>{transaction.status}</td>
-            <td>{transaction.type}</td>
-            <td>{formatDate(transaction.created_at)}</td>
-            <td>{formatValue(transaction.metadata)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+  return renderDataTable(
+    transactions.map((transaction) => ({
+      ...transaction,
+      amount: `$${transaction.amount.toFixed(2)}`,
+    })) as TableRow[],
+    changedIds,
   )
 }
 
 function renderActivityLogsTable(activityLogs: ActivityLogRecord[], changedIds: string[]) {
-  return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>User ID</th>
-          <th>Transaction ID</th>
-          <th>Action</th>
-          <th>Timestamp</th>
-          <th>Details</th>
-        </tr>
-      </thead>
-      <tbody>
-        {activityLogs.map((log, index) => (
-          <tr key={`${log.id}-${index}`} className={changedIds.includes(log.id) ? 'changed-row' : undefined}>
-            <td>{log.id}</td>
-            <td>{log.user_id}</td>
-            <td>{log.transaction_id}</td>
-            <td>{log.action}</td>
-            <td>{formatDate(log.timestamp)}</td>
-            <td>{log.details}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
+  return renderDataTable(activityLogs as unknown as TableRow[], changedIds)
 }
 
 function renderFeatureFlagsTable(featureFlags: Record<string, boolean>, changedFlags: string[]) {
-  return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th>Flag</th>
-          <th>Enabled</th>
-        </tr>
-      </thead>
-      <tbody>
-        {Object.entries(featureFlags).map(([flag, enabled], index) => (
-          <tr key={`${flag}-${index}`} className={changedFlags.includes(flag) ? 'changed-row' : undefined}>
-            <td>{flag}</td>
-            <td>{enabled ? 'true' : 'false'}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+  return renderDataTable(
+    Object.entries(featureFlags).map(([flag, enabled]) => ({
+      id: flag,
+      flag,
+      enabled,
+    })),
+    changedFlags,
   )
 }
 
