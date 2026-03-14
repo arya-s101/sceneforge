@@ -29,15 +29,30 @@ body {
   overflow-x: hidden;
 }
 
-/* Fixed background gradient as a GPU-composited layer — visually identical
-   to background-attachment:fixed but never repaints on scroll. */
+/* Fixed background — ripple texture (diffused) + subtle radial accents.
+   GPU-composited fixed layer; never repaints on scroll. */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
+  background-image: url('/ripple-bg.jpg');
+  background-size: cover;
+  background-position: center;
+  opacity: 0.07;
+  filter: blur(6px);
+  pointer-events: none;
+  z-index: -2;
+  will-change: transform;
+}
+
+/* Radial accent layer on top of the texture */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
   background:
-    radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.04), transparent 25%),
-    radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.04), transparent 25%);
+    radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.03), transparent 25%),
+    radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.03), transparent 25%);
   pointer-events: none;
   z-index: -1;
   will-change: transform;

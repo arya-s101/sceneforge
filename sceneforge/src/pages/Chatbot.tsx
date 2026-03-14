@@ -696,17 +696,22 @@ const Chatbot: React.FC = () => {
         <div className={`chat-content ${sandboxData ? 'chat-content-loaded' : ''}`}>
           {isGenerating || isHydratingSandbox ? (
             <div className="empty-state">
-              <div className="empty-icon glass loading-spin">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                </svg>
+              <div className="loading-state">
+                <div className="empty-icon glass loading-spin">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                    <polygon className="bolt-outline" points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    <polygon className="bolt-filled"  points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                </div>
+
+                <h2 className="loading-heading">
+                  {isHydratingSandbox ? 'Restoring sandbox...' : 'Forging your sandbox...'}
+                </h2>
+
+                <span className="loading-status">
+                  {isHydratingSandbox ? 'hydrating · session memory' : 'synthesising · ai model active'}
+                </span>
               </div>
-              <h2>{isHydratingSandbox ? 'Restoring sandbox...' : 'Forging your sandbox...'}</h2>
-              <p className="workspace-subtitle">
-                {isHydratingSandbox
-                  ? 'Loading saved sandbox data from the shareable URL.'
-                  : 'Generating coherent users, domain-specific records, activity logs, and flags from your prompt.'}
-              </p>
             </div>
           ) : sandboxData ? (
             <div className="workspace-panel">
