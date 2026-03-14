@@ -145,6 +145,8 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  min-width: 0;
+  min-height: 0;
 }
 
 .chat-header {
@@ -155,6 +157,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: rgba(10, 10, 14, 0.94);
+  backdrop-filter: blur(18px);
 }
 
 .chat-header h2 {
@@ -222,12 +230,18 @@
 
 .chat-content {
   flex: 1;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 40px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-content-loaded {
+  align-items: stretch;
+  justify-content: flex-start;
 }
 
 .empty-state {
@@ -379,17 +393,16 @@
   flex-direction: column;
   gap: 20px;
   align-self: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .workspace-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding-bottom: 4px;
-  background: linear-gradient(180deg, rgba(10, 10, 14, 0.96) 0%, rgba(10, 10, 14, 0.88) 80%, rgba(10, 10, 14, 0) 100%);
+  flex-shrink: 0;
+  width: 100%;
 }
 
 .workspace-alert {
@@ -416,6 +429,7 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
+  width: 100%;
 }
 
 .metric-card {
@@ -443,6 +457,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+  width: 100%;
+  padding-bottom: 4px;
 }
 
 .tab-btn {
@@ -464,10 +480,11 @@
 
 .table-shell {
   width: 100%;
-  overflow: auto;
   border: 1px solid var(--glass-border);
   border-radius: 20px;
-  min-height: 280px;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
 }
 
 .data-table {

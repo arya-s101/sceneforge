@@ -391,7 +391,7 @@ const Chatbot: React.FC = () => {
           </div>
         </header>
 
-        <div className="chat-content">
+        <div className={`chat-content ${sandboxData ? 'chat-content-loaded' : ''}`}>
           {isGenerating ? (
             <div className="empty-state">
               <div className="empty-icon glass loading-spin">
