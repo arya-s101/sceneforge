@@ -227,8 +227,8 @@ function renderUsersTable(users: UserRecord[], changedIds: string[]) {
         </tr>
       </thead>
       <tbody>
-        {users.map((user) => (
-          <tr key={user.id} className={changedIds.includes(user.id) ? 'changed-row' : undefined}>
+        {users.map((user, index) => (
+          <tr key={`${user.id}-${index}`} className={changedIds.includes(user.id) ? 'changed-row' : undefined}>
             <td>{user.id}</td>
             <td>{user.name}</td>
             <td>{user.email}</td>
@@ -257,8 +257,11 @@ function renderTransactionsTable(transactions: TransactionRecord[], changedIds: 
         </tr>
       </thead>
       <tbody>
-        {transactions.map((transaction) => (
-          <tr key={transaction.id} className={changedIds.includes(transaction.id) ? 'changed-row' : undefined}>
+        {transactions.map((transaction, index) => (
+          <tr
+            key={`${transaction.id}-${index}`}
+            className={changedIds.includes(transaction.id) ? 'changed-row' : undefined}
+          >
             <td>{transaction.id}</td>
             <td>{transaction.user_id}</td>
             <td>${transaction.amount.toFixed(2)}</td>
@@ -287,8 +290,8 @@ function renderActivityLogsTable(activityLogs: ActivityLogRecord[], changedIds: 
         </tr>
       </thead>
       <tbody>
-        {activityLogs.map((log) => (
-          <tr key={log.id} className={changedIds.includes(log.id) ? 'changed-row' : undefined}>
+        {activityLogs.map((log, index) => (
+          <tr key={`${log.id}-${index}`} className={changedIds.includes(log.id) ? 'changed-row' : undefined}>
             <td>{log.id}</td>
             <td>{log.user_id}</td>
             <td>{log.transaction_id}</td>
@@ -312,8 +315,8 @@ function renderFeatureFlagsTable(featureFlags: Record<string, boolean>, changedF
         </tr>
       </thead>
       <tbody>
-        {Object.entries(featureFlags).map(([flag, enabled]) => (
-          <tr key={flag} className={changedFlags.includes(flag) ? 'changed-row' : undefined}>
+        {Object.entries(featureFlags).map(([flag, enabled], index) => (
+          <tr key={`${flag}-${index}`} className={changedFlags.includes(flag) ? 'changed-row' : undefined}>
             <td>{flag}</td>
             <td>{enabled ? 'true' : 'false'}</td>
           </tr>
