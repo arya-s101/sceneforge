@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import OpenAI from 'openai'
 
 import {
   createSandboxRecord,
@@ -13,7 +13,7 @@ import { supabase } from './lib/supabase.ts'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
-const MODEL = 'gemini-2.0-flash'
+const MODEL = 'gpt-4o'
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
 const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON with no markdown, no explanation, no code blocks — just raw JSON.
@@ -69,9 +69,10 @@ function ensureSupabaseEnv(): void {
   ensureEnv('SUPABASE_ANON_KEY')
 }
 
-function getGeminiModel() {
-  const genAI = new GoogleGenerativeAI(ensureEnv('GEMINI_API_KEY'))
-  return genAI.getGenerativeModel({ model: MODEL })
+function getOpenAIClient() {
+  return new OpenAI({
+    apiKey: ensureEnv('OPENAI_API_KEY'),
+  })
 }
 
 async function getMemoryRecord(): Promise<MemoryRow | null> {
@@ -138,12 +139,21 @@ async function getSandboxById(id: string): Promise<SandboxRow> {
 }
 
 async function requestModelJson(systemPrompt: string, prompt: string): Promise<string> {
-  const model = getGeminiModel()
-  const result = await model.generateContent(`${systemPrompt}\n\n${prompt}`)
-  const text = result.response.text().trim()
+  const openai = getOpenAIClient()
+  const response = await openai.chat.completions.create({
+    model: MODEL,
+    messages: [
+      {
+        role: 'user',
+        content: `${systemPrompt}\n\n${prompt}`,
+      },
+    ],
+    response_format: { type: 'json_object' },
+  })
+  const text = response.choices[0]?.message?.content?.trim()
 
   if (!text) {
-    throw new Error('Gemini returned an empty response.')
+    throw new Error('OpenAI returned an empty response.')
   }
 
   return text

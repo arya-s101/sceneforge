@@ -291,33 +291,8 @@ function deriveDashboardMetrics(
   }
 }
 
-export function stripClaudeMarkdown(rawText: string): string {
-  const trimmed = rawText.trim()
-
-  if (!trimmed.startsWith('```')) {
-    return trimmed
-  }
-
-  return trimmed
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim()
-}
-
-export function extractJsonString(rawText: string): string {
-  const cleaned = stripClaudeMarkdown(rawText)
-  const start = cleaned.indexOf('{')
-  const end = cleaned.lastIndexOf('}')
-
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error('Claude did not return JSON.')
-  }
-
-  return cleaned.slice(start, end + 1)
-}
-
 export function parseSandboxPayload(rawText: string): SandboxData {
-  const parsed = JSON.parse(extractJsonString(rawText)) as Record<string, unknown>
+  const parsed = JSON.parse(rawText.trim()) as Record<string, unknown>
   const baseTime = new Date()
   const users = normalizeUsers(Array.isArray(parsed.users) ? parsed.users : [], new Date(baseTime.getTime() - 8 * 3_600_000))
   const transactions = normalizeTransactions(
