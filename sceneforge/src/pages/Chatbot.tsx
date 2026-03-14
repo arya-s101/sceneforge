@@ -366,6 +366,7 @@ const Chatbot: React.FC = () => {
       try {
         const restoredSandbox = await getSandbox(sandboxId)
         setSandbox(restoredSandbox)
+        preChaosData.current = JSON.parse(JSON.stringify(restoredSandbox.data)) as LoadedSandboxData
         setChaosHighlights(null)
         setChangedRowIds([])
         setChangedFeatureFlags([])
@@ -469,6 +470,7 @@ const Chatbot: React.FC = () => {
     try {
       const result = await generateSandbox(description)
       setSandbox(result)
+      preChaosData.current = JSON.parse(JSON.stringify(result.data)) as LoadedSandboxData
       setActiveTab('users')
       setPreviousPrompts(savePromptToStorage(description, result.sandbox_id))
       setSandboxUrl(result.sandbox_id)
@@ -532,6 +534,7 @@ const Chatbot: React.FC = () => {
         result.chaos_applied,
       )
       setSandbox(result)
+      preChaosData.current = JSON.parse(JSON.stringify(result.data)) as LoadedSandboxData
       setChaosHighlights(nextHighlights)
       setChangedRowIds(Array.from(changedIds))
       setChangedFeatureFlags(featureFlags)
