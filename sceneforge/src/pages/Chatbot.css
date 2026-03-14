@@ -75,14 +75,8 @@
 }
 
 .history-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
   border-radius: 8px;
-  cursor: pointer;
   color: var(--text-secondary);
-  transition: all 0.2s ease;
   font-size: 14px;
 }
 
@@ -91,10 +85,29 @@
   color: var(--text-primary);
 }
 
+.history-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
 .history-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.history-empty {
+  padding: 10px 12px;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .sidebar-footer {
@@ -121,6 +134,11 @@
   background: rgba(255, 255, 255, 0.1);
 }
 
+.view-db-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 /* Main Area */
 .chat-main {
   flex: 1;
@@ -135,11 +153,66 @@
   border-radius: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 24px;
 }
 
 .chat-header h2 {
   font-size: 15px;
   font-weight: 500;
+}
+
+.chat-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-action-btn {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.header-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.header-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.header-action-btn.danger {
+  border-color: rgba(255, 92, 92, 0.3);
+  color: #ffb6b6;
+}
+
+.chaos-indicator,
+.status-indicator {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chaos-indicator {
+  color: #ff7d7d;
+  animation: chaosFlash 0.4s ease;
+}
+
+.status-indicator {
+  color: #98f6b0;
 }
 
 .text-secondary {
@@ -181,6 +254,13 @@
   font-size: 32px;
   margin-bottom: 48px;
   letter-spacing: -0.02em;
+}
+
+.workspace-subtitle {
+  margin-bottom: 32px;
+  max-width: 720px;
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.6;
 }
 
 .example-grid {
@@ -288,6 +368,147 @@
   color: rgba(255, 255, 255, 0.4);
 }
 
+.loading-spin {
+  animation: rotateGlyph 1.2s linear infinite;
+}
+
+.workspace-panel {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.workspace-alert {
+  width: 100%;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+
+.workspace-alert.error {
+  color: #ffb7b7;
+  background: rgba(255, 79, 79, 0.12);
+  border-color: rgba(255, 79, 79, 0.2);
+}
+
+.workspace-alert.compact {
+  max-width: 760px;
+  margin-bottom: 20px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.metric-card {
+  padding: 18px;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metric-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.metric-card strong {
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+
+.tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tab-btn {
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover,
+.tab-btn.active {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.table-shell {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+}
+
+.data-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-family: "SFMono-Regular", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+}
+
+.data-table th,
+.data-table td {
+  padding: 14px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(10, 10, 14, 0.92);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+}
+
+.data-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+@keyframes rotateGlyph {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes chaosFlash {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (max-width: 768px) {
   .chat-sidebar {
     display: none;
@@ -299,5 +520,18 @@
   
   .chat-input-container {
     padding: 16px;
+  }
+
+  .chat-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .chat-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

@@ -1,108 +1,472 @@
-import React, { useState } from 'react';
-import './Chatbot.css';
+import React, { useEffect, useMemo, useState } from 'react'
+
+import {
+  applyChaos,
+  generateSandbox,
+  saveTemplate,
+  type ActivityLogRecord,
+  type SandboxResponse,
+  type TransactionRecord,
+  type UserRecord,
+} from '../lib/api'
+import './Chatbot.css'
 
 const examplePrompts = [
-  "Generate 100 users with abandoned carts in the last 24h",
-  "Create a mock database of failed login attempts from EU regions",
-  "Design a scenario with 50 admins trying to access restricted endpoints",
-  "Simulate traffic spike of 5000 users searching for 'wireless headphones'"
-];
+  'Generate 100 users with abandoned carts in the last 24h',
+  'Create a mock database of failed login attempts from EU regions',
+  'Design a scenario with 50 admins trying to access restricted endpoints',
+  "Simulate traffic spike of 5000 users searching for 'wireless headphones'",
+]
 
-const previousPrompts = [
-  "Generate generic e-commerce user profiles with 5 purchases",
-  "Create database of users with 2FA enabled",
-  "Mock 10 users with corrupted avatar images",
-  "Generate test data for password reset flow"
-];
+const chaosTypes = ['failed_payment', 'permission_conflict', 'data_anomaly'] as const
+const tabs = [
+  { id: 'users', label: 'Users' },
+  { id: 'transactions', label: 'Transactions' },
+  { id: 'activity_logs', label: 'Activity Logs' },
+  { id: 'feature_flags', label: 'Feature Flags' },
+] as const
+
+type TabId = (typeof tabs)[number]['id']
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Something went wrong.'
+}
+
+function formatDate(value: string): string {
+  const parsed = new Date(value)
+
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+
+  return parsed.toLocaleString()
+}
+
+function formatValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  if (value === null || value === undefined) {
+    return '—'
+  }
+
+  return JSON.stringify(value)
+}
+
+function formatChaosLabel(value: string): string {
+  return value
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function renderUsersTable(users: UserRecord[]) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {users.map((user) => (
+          <tr key={user.id}>
+            <td>{user.id}</td>
+            <td>{user.name}</td>
+            <td>{user.email}</td>
+            <td>{user.role}</td>
+            <td>{user.status}</td>
+            <td>{formatDate(user.created_at)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function renderTransactionsTable(transactions: TransactionRecord[]) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User ID</th>
+          <th>Amount</th>
+          <th>Status</th>
+          <th>Type</th>
+          <th>Created</th>
+          <th>Metadata</th>
+        </tr>
+      </thead>
+      <tbody>
+        {transactions.map((transaction) => (
+          <tr key={transaction.id}>
+            <td>{transaction.id}</td>
+            <td>{transaction.user_id}</td>
+            <td>${transaction.amount.toFixed(2)}</td>
+            <td>{transaction.status}</td>
+            <td>{transaction.type}</td>
+            <td>{formatDate(transaction.created_at)}</td>
+            <td>{formatValue(transaction.metadata)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function renderActivityLogsTable(activityLogs: ActivityLogRecord[]) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>User ID</th>
+          <th>Transaction ID</th>
+          <th>Action</th>
+          <th>Timestamp</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {activityLogs.map((log) => (
+          <tr key={log.id}>
+            <td>{log.id}</td>
+            <td>{log.user_id}</td>
+            <td>{log.transaction_id}</td>
+            <td>{log.action}</td>
+            <td>{formatDate(log.timestamp)}</td>
+            <td>{log.details}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function renderFeatureFlagsTable(featureFlags: Record<string, boolean>) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Flag</th>
+          <th>Enabled</th>
+        </tr>
+      </thead>
+      <tbody>
+        {Object.entries(featureFlags).map(([flag, enabled]) => (
+          <tr key={flag}>
+            <td>{flag}</td>
+            <td>{enabled ? 'true' : 'false'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
 
 const Chatbot: React.FC = () => {
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState('')
+  const [previousPrompts, setPreviousPrompts] = useState<string[]>([])
+  const [sandbox, setSandbox] = useState<SandboxResponse | null>(null)
+  const [activeTab, setActiveTab] = useState<TabId>('users')
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [isApplyingChaos, setIsApplyingChaos] = useState(false)
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [chaosIndicator, setChaosIndicator] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!chaosIndicator) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setChaosIndicator(null)
+    }, 3200)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [chaosIndicator])
+
+  const headerSandboxId = sandbox?.sandbox_id ?? 'No sandbox loaded'
+  const metrics = sandbox?.data.dashboard_metrics
+
+  const activeTable = useMemo(() => {
+    if (!sandbox) {
+      return null
+    }
+
+    switch (activeTab) {
+      case 'users':
+        return renderUsersTable(sandbox.data.users)
+      case 'transactions':
+        return renderTransactionsTable(sandbox.data.transactions)
+      case 'activity_logs':
+        return renderActivityLogsTable(sandbox.data.activity_logs)
+      case 'feature_flags':
+        return renderFeatureFlagsTable(sandbox.data.feature_flags)
+      default:
+        return null
+    }
+  }, [activeTab, sandbox])
+
+  async function handleSubmit() {
+    const description = inputText.trim()
+    if (!description || isGenerating) {
+      return
+    }
+
+    setIsGenerating(true)
+    setErrorMessage(null)
+    setStatusMessage(null)
+    setChaosIndicator(null)
+
+    try {
+      const result = await generateSandbox(description)
+      setSandbox(result)
+      setActiveTab('users')
+      setPreviousPrompts((current) => [description, ...current.filter((item) => item !== description)])
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  async function handleChaos() {
+    if (!sandbox || isApplyingChaos) {
+      return
+    }
+
+    setIsApplyingChaos(true)
+    setErrorMessage(null)
+    setStatusMessage(null)
+
+    const chaosType = chaosTypes[Math.floor(Math.random() * chaosTypes.length)]
+
+    try {
+      const result = await applyChaos(sandbox.sandbox_id, chaosType)
+      setSandbox(result)
+      setChaosIndicator(`Chaos injected: ${formatChaosLabel(result.chaos_applied)}`)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsApplyingChaos(false)
+    }
+  }
+
+  async function handleSaveTemplate() {
+    if (!sandbox || isSavingTemplate) {
+      return
+    }
+
+    const name = window.prompt('Template name')
+    if (!name?.trim()) {
+      return
+    }
+
+    setIsSavingTemplate(true)
+    setErrorMessage(null)
+
+    try {
+      const result = await saveTemplate(sandbox.sandbox_id, name.trim())
+      setStatusMessage(`Template saved: ${result.template_id}`)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsSavingTemplate(false)
+    }
+  }
+
+  function handleReset() {
+    setSandbox(null)
+    setActiveTab('users')
+    setInputText('')
+    setErrorMessage(null)
+    setStatusMessage(null)
+    setChaosIndicator(null)
+  }
 
   return (
     <div className="chatbot-layout">
-      {/* Sidebar */}
       <aside className="chat-sidebar glass">
         <div className="sidebar-header">
           <a href="/" className="logo-link">
-            <span className="logo-text">Scene<span className="logo-accent">Forge</span></span>
+            <span className="logo-text">
+              Scene<span className="logo-accent">Forge</span>
+            </span>
           </a>
-          <button className="new-chat-btn">
-             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-             </svg>
+          <button type="button" className="new-chat-btn" onClick={handleReset}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
             New Project
           </button>
         </div>
-        
+
         <div className="history-section">
           <h3>Previous Prompts</h3>
           <ul className="history-list">
-            {previousPrompts.map((prompt, index) => (
-              <li key={index} className="history-item">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                </svg>
-                <span className="history-text">{prompt}</span>
-              </li>
-            ))}
+            {previousPrompts.length === 0 ? (
+              <li className="history-empty">Generated prompts will appear here.</li>
+            ) : (
+              previousPrompts.map((prompt, index) => (
+                <li key={`${prompt}-${index}`} className="history-item">
+                  <button type="button" className="history-button" onClick={() => setInputText(prompt)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <span className="history-text">{prompt}</span>
+                  </button>
+                </li>
+              ))
+            )}
           </ul>
         </div>
-        
+
         <div className="sidebar-footer">
-          <button className="view-db-btn">
+          <button type="button" className="view-db-btn" disabled>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
               <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
               <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
             </svg>
-            View Databases
+            Session Memory Ready
           </button>
         </div>
       </aside>
 
-      {/* Main Chat Area */}
       <main className="chat-main">
         <header className="chat-header glass">
-          <h2>Active Sandbox: <span className="text-secondary">sf-sandbox-01</span></h2>
+          <div className="chat-header-copy">
+            <h2>
+              Active Sandbox: <span className="text-secondary">{headerSandboxId}</span>
+            </h2>
+            {chaosIndicator ? <span className="chaos-indicator">{chaosIndicator}</span> : null}
+            {statusMessage ? <span className="status-indicator">{statusMessage}</span> : null}
+          </div>
+          <div className="chat-header-actions">
+            <button type="button" className="header-action-btn danger" onClick={handleChaos} disabled={!sandbox || isApplyingChaos || isGenerating}>
+              {isApplyingChaos ? 'Injecting...' : 'Chaos'}
+            </button>
+            <button type="button" className="header-action-btn" onClick={handleSaveTemplate} disabled={!sandbox || isSavingTemplate || isGenerating}>
+              {isSavingTemplate ? 'Saving...' : 'Save Template'}
+            </button>
+            <button type="button" className="header-action-btn" onClick={handleReset}>
+              Reset
+            </button>
+          </div>
         </header>
 
         <div className="chat-content">
-          <div className="empty-state">
-             <div className="empty-icon glass">
-                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {isGenerating ? (
+            <div className="empty-state">
+              <div className="empty-icon glass loading-spin">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                 </svg>
-             </div>
-             <h2>What data shall we forge today?</h2>
-             <div className="example-grid">
-               {examplePrompts.map((prompt, index) => (
-                 <button 
-                   key={index} 
-                   className="example-btn glass"
-                   onClick={() => setInputText(prompt)}
-                 >
-                   <span className="example-text">"{prompt}"</span>
-                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="example-icon">
-                     <line x1="5" y1="12" x2="19" y2="12"></line>
-                     <polyline points="12 5 19 12 12 19"></polyline>
-                   </svg>
-                 </button>
-               ))}
-             </div>
-          </div>
+                </svg>
+              </div>
+              <h2>Forging your sandbox...</h2>
+              <p className="workspace-subtitle">Generating coherent users, transactions, activity logs, and flags from your prompt.</p>
+            </div>
+          ) : sandbox ? (
+            <div className="workspace-panel">
+              {errorMessage ? <div className="workspace-alert error">{errorMessage}</div> : null}
+
+              {metrics ? (
+                <div className="metrics-grid">
+                  <div className="metric-card glass">
+                    <span className="metric-label">Total Revenue</span>
+                    <strong>${metrics.total_revenue.toFixed(2)}</strong>
+                  </div>
+                  <div className="metric-card glass">
+                    <span className="metric-label">Active Users</span>
+                    <strong>{metrics.active_users}</strong>
+                  </div>
+                  <div className="metric-card glass">
+                    <span className="metric-label">Failed Transactions</span>
+                    <strong>{metrics.failed_transactions}</strong>
+                  </div>
+                  <div className="metric-card glass">
+                    <span className="metric-label">Anomaly Score</span>
+                    <strong>{metrics.anomaly_score}</strong>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="tab-row">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="table-shell glass">{activeTable}</div>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <div className="empty-icon glass">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+              </div>
+              <h2>What data shall we forge today?</h2>
+              <p className="workspace-subtitle">Describe the demo or QA environment you want to generate, then inspect the resulting entities in structured tabs.</p>
+              {errorMessage ? <div className="workspace-alert error compact">{errorMessage}</div> : null}
+              <div className="example-grid">
+                {examplePrompts.map((prompt, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    className="example-btn glass"
+                    onClick={() => setInputText(prompt)}
+                  >
+                    <span className="example-text">"{prompt}"</span>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="example-icon">
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                      <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="chat-input-container">
           <div className="input-wrapper glass">
-            <input 
-              type="text" 
-              className="chat-input" 
+            <input
+              type="text"
+              className="chat-input"
               placeholder="Describe the user data scenario you want to simulate..."
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(event) => setInputText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void handleSubmit()
+                }
+              }}
             />
-            <button className="send-btn" disabled={!inputText.trim()}>
+            <button type="button" className="send-btn" disabled={!inputText.trim() || isGenerating} onClick={() => void handleSubmit()}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
                 <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -113,7 +477,7 @@ const Chatbot: React.FC = () => {
         </div>
       </main>
     </div>
-  );
-};
+  )
+}
 
-export default Chatbot;
+export default Chatbot
