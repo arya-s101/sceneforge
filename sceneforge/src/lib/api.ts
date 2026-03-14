@@ -93,3 +93,13 @@ export function saveTemplate(sandboxId: string, name: string) {
     }),
   })
 }
+
+export function getSandbox(sandboxId: string) {
+  return apiRequest<{
+    id: string
+    data: SandboxData
+  }>(`/api/sandbox/${sandboxId}`).then((payload) => ({
+    sandbox_id: payload.id,
+    data: payload.data,
+  }))
+}

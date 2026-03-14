@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   applyChaos,
   generateSandbox,
+  getSandbox,
   saveTemplate,
   type ActivityLogRecord,
   type SandboxResponse,
@@ -28,6 +29,8 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]['id']
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
+
+const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge.previousPrompts'
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.'
@@ -64,6 +67,39 @@ function formatChaosLabel(value: string): string {
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
+}
+
+function getSandboxIdFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search)
+  const sandboxId = params.get('sandbox')
+
+  return sandboxId?.trim() || null
+}
+
+function setSandboxUrl(sandboxId: string) {
+  window.history.pushState({}, '', `/chat?sandbox=${encodeURIComponent(sandboxId)}`)
+}
+
+function clearSandboxUrl() {
+  window.history.replaceState({}, '', '/chat')
+}
+
+function readStoredPrompts(): string[] {
+  if (typeof window === 'undefined') {
+    return []
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PREVIOUS_PROMPTS_STORAGE_KEY)
+    if (!raw) {
+      return []
+    }
+
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
 }
 
 function renderUsersTable(users: UserRecord[]) {
@@ -178,15 +214,17 @@ function renderFeatureFlagsTable(featureFlags: Record<string, boolean>) {
 
 const Chatbot: React.FC = () => {
   const [inputText, setInputText] = useState('')
-  const [previousPrompts, setPreviousPrompts] = useState<string[]>([])
+  const [previousPrompts, setPreviousPrompts] = useState<string[]>(() => readStoredPrompts())
   const [sandbox, setSandbox] = useState<SandboxResponse | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('users')
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isHydratingSandbox, setIsHydratingSandbox] = useState(false)
   const [isApplyingChaos, setIsApplyingChaos] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [chaosIndicator, setChaosIndicator] = useState<string | null>(null)
+  const [expiredSandboxMessage, setExpiredSandboxMessage] = useState<string | null>(null)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -199,6 +237,62 @@ const Chatbot: React.FC = () => {
 
     return () => window.clearTimeout(timeoutId)
   }, [chaosIndicator])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(previousPrompts))
+  }, [previousPrompts])
+
+  useEffect(() => {
+    const sandboxId = getSandboxIdFromUrl()
+    if (!sandboxId) {
+      return
+    }
+
+    let isCancelled = false
+
+    async function hydrateSandbox() {
+      setIsHydratingSandbox(true)
+      setErrorMessage(null)
+      setExpiredSandboxMessage(null)
+
+      try {
+        const restoredSandbox = await getSandbox(sandboxId)
+        if (isCancelled) {
+          return
+        }
+
+        setSandbox(restoredSandbox)
+        setActiveTab('users')
+      } catch (error) {
+        if (isCancelled) {
+          return
+        }
+
+        const message = getErrorMessage(error)
+        if (/not found|expired/i.test(message)) {
+          setSandbox(null)
+          setExpiredSandboxMessage('This sandbox has expired.')
+          clearSandboxUrl()
+        } else {
+          setErrorMessage(message)
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsHydratingSandbox(false)
+        }
+      }
+    }
+
+    void hydrateSandbox()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [])
 
   const headerSandboxId = sandbox?.sandbox_id ?? 'No sandbox loaded'
   const sandboxData = useMemo<LoadedSandboxData | null>(() => {
@@ -252,12 +346,14 @@ const Chatbot: React.FC = () => {
     setErrorMessage(null)
     setStatusMessage(null)
     setChaosIndicator(null)
+    setExpiredSandboxMessage(null)
 
     try {
       const result = await generateSandbox(description)
       setSandbox(result)
       setActiveTab('users')
       appendPreviousPrompt(description)
+      setSandboxUrl(result.sandbox_id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
@@ -317,6 +413,8 @@ const Chatbot: React.FC = () => {
     setErrorMessage(null)
     setStatusMessage(null)
     setChaosIndicator(null)
+    setExpiredSandboxMessage(null)
+    clearSandboxUrl()
   }
 
   return (
@@ -392,15 +490,19 @@ const Chatbot: React.FC = () => {
         </header>
 
         <div className={`chat-content ${sandboxData ? 'chat-content-loaded' : ''}`}>
-          {isGenerating ? (
+          {isGenerating || isHydratingSandbox ? (
             <div className="empty-state">
               <div className="empty-icon glass loading-spin">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                 </svg>
               </div>
-              <h2>Forging your sandbox...</h2>
-              <p className="workspace-subtitle">Generating coherent users, transactions, activity logs, and flags from your prompt.</p>
+              <h2>{isHydratingSandbox ? 'Restoring sandbox...' : 'Forging your sandbox...'}</h2>
+              <p className="workspace-subtitle">
+                {isHydratingSandbox
+                  ? 'Loading saved sandbox data from the shareable URL.'
+                  : 'Generating coherent users, transactions, activity logs, and flags from your prompt.'}
+              </p>
             </div>
           ) : sandboxData ? (
             <div className="workspace-panel">
@@ -451,8 +553,12 @@ const Chatbot: React.FC = () => {
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                 </svg>
               </div>
-              <h2>What data shall we forge today?</h2>
-              <p className="workspace-subtitle">Describe the demo or QA environment you want to generate, then inspect the resulting entities in structured tabs.</p>
+              <h2>{expiredSandboxMessage ?? 'What data shall we forge today?'}</h2>
+              <p className="workspace-subtitle">
+                {expiredSandboxMessage
+                  ? 'Generate a fresh sandbox to continue exploring realistic demo and QA environments.'
+                  : 'Describe the demo or QA environment you want to generate, then inspect the resulting entities in structured tabs.'}
+              </p>
               {errorMessage ? <div className="workspace-alert error compact">{errorMessage}</div> : null}
               <div className="example-grid">
                 {examplePrompts.map((prompt, index) => (
