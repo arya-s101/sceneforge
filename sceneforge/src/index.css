@@ -9,6 +9,7 @@
   --accent-hover: #e0e0e0;
   
   --font-main: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Courier New', Courier, monospace;
   --nav-height: 80px;
 }
 
@@ -26,10 +27,20 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
-  background-image: 
+}
+
+/* Fixed background gradient as a GPU-composited layer — visually identical
+   to background-attachment:fixed but never repaints on scroll. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
     radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.04), transparent 25%),
     radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.04), transparent 25%);
-  background-attachment: fixed;
+  pointer-events: none;
+  z-index: -1;
+  will-change: transform;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -51,21 +62,23 @@ button {
   background: none;
 }
 
-/* Global Glassmorphism Utility */
+/* Global Glassmorphism Utility — reduced blur for compositing cost */
 .glass {
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
   border-radius: 16px;
+  will-change: transform;
 }
 
 /* Layout container */
 .container {
-  max-width: 1200px;
+  max-width: 1440px;
+  width: 100%;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 40px;
 }
 
 /* Selection */

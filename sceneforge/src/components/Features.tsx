@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'framer-motion';
 import './Features.css';
 
 const featuresData = [
@@ -33,6 +34,14 @@ const featuresData = [
 ];
 
 const Features: React.FC = () => {
+  const constraintRef = React.useRef<HTMLElement | null>(null);
+  const [isMounted, setIsMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    constraintRef.current = document.documentElement;
+    setIsMounted(true);
+  }, []);
+
   return (
     <section id="features" className="features">
       <div className="container">
@@ -43,41 +52,92 @@ const Features: React.FC = () => {
           </p>
         </div>
         
-        <div className="features-grid">
-          {featuresData.map((feature, index) => (
-            <div key={index} className="feature-card glass">
-              <div className="feature-icon">{feature.icon}</div>
-              <h3 className="feature-title">{feature.title}</h3>
-              <p className="feature-description">{feature.description}</p>
-            </div>
-          ))}
+        <div className="features-layout">
+          <div className="features-grid">
+            {featuresData.map((feature, index) => {
+              return (
+                <div 
+                  key={index} 
+                  className={`feature-card glass`}
+                >
+                  <div className="feature-icon">{feature.icon}</div>
+                  <h3 className="feature-title">{feature.title}</h3>
+                  <p className="feature-description">{feature.description}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
         
-        <div className="interactive-demo glass">
-          <div className="demo-header">
-            <span className="dot dot-red"></span>
-            <span className="dot dot-yellow"></span>
-            <span className="dot dot-green"></span>
-            <span className="demo-title">SceneForge Terminal</span>
-          </div>
-          <div className="demo-body">
-            <div className="demo-line">
-              <span className="prompt-symbol">&gt;</span> 
-              <span className="typing-text">Generate 500 tech-savvy users experiencing a login failure...</span>
-            </div>
-            <div className="demo-line response delayed-1">
-              [SYSTEM] Processing prompt... 
-            </div>
-            <div className="demo-line response delayed-2">
-              [SYSTEM] Generated 500 profiles with context 'login failure'.
-            </div>
-            <div className="demo-line response delayed-3 json-code">
-              {`{
+        <div className="terminals-layout">
+          <div className="demo-container">
+            <motion.div 
+              className="interactive-demo terminal-1 glass"
+              drag
+              dragConstraints={isMounted && constraintRef.current ? constraintRef : undefined}
+              dragElastic={0.08}
+              whileDrag={{ scale: 1.05, cursor: "grabbing", zIndex: 10 }}
+            >
+              <div className="demo-header">
+                <span className="dot dot-red"></span>
+                <span className="dot dot-yellow"></span>
+                <span className="dot dot-green"></span>
+                <span className="demo-title">SceneForge Terminal</span>
+              </div>
+              <div className="demo-body">
+                <div className="demo-line">
+                  <span className="prompt-symbol">&gt;</span> 
+                  <span className="typing-text">Generate 500 tech-savvy users experiencing a login failure...</span>
+                </div>
+                <div className="demo-line response delayed-1">
+                  [SYSTEM] Processing prompt... 
+                </div>
+                <div className="demo-line response delayed-2">
+                  [SYSTEM] Generated 500 profiles with context 'login failure'.
+                </div>
+                <div className="demo-line response delayed-3 json-code">
+                  {`{
   "sandbox_id": "sf-90210",
   "status": "Ready",
   "data_preview": [ { "user": "Alice", "device": "iOS 17" } ... ]
 }`}
-            </div>
+                </div>
+              </div>
+            </motion.div>
+            
+            <motion.div 
+              className="interactive-demo terminal-2 glass"
+              drag
+              dragConstraints={isMounted && constraintRef.current ? constraintRef : undefined}
+              dragElastic={0.08}
+              whileDrag={{ scale: 1.05, cursor: "grabbing", zIndex: 10 }}
+            >
+              <div className="demo-header">
+                <span className="dot dot-red"></span>
+                <span className="dot dot-yellow"></span>
+                <span className="dot dot-green"></span>
+                <span className="demo-title">SceneForge Terminal</span>
+              </div>
+              <div className="demo-body">
+                <div className="demo-line">
+                  <span className="prompt-symbol">&gt;</span> 
+                  <span className="typing-text">Simulate 10k abandoned carts in the EU region...</span>
+                </div>
+                <div className="demo-line response delayed-1">
+                  [SYSTEM] Processing prompt... 
+                </div>
+                <div className="demo-line response delayed-2">
+                  [SYSTEM] Generated 10,000 cart sessions with checkout=false.
+                </div>
+                <div className="demo-line response delayed-3 json-code">
+                  {`{
+  "sandbox_id": "sf-eu-carts",
+  "status": "Ready",
+  "data_preview": [ { "id": "c_8f2a", "region": "EU" } ... ]
+}`}
+                </div>
+              </div>
+            </motion.div>
           </div>
         </div>
       </div>
