@@ -20,6 +20,7 @@ export type DashboardMetrics = Record<string, unknown> & {
   primary_metric_label: string
   active_users: number
   failed_records: number
+  closed_records: number
   anomaly_score: number
   active_records?: number
   inactive_records?: number
@@ -153,11 +154,20 @@ function isFailureStatus(value: unknown): boolean {
 }
 
 function isActiveStatus(value: unknown): boolean {
-  return typeof value === 'string' && /active|open|healthy|running|completed/i.test(value)
+  return (
+    typeof value === 'string' &&
+    !isFailureStatus(value) &&
+    !isClosedStatus(value) &&
+    !isInactiveStatus(value)
+  )
 }
 
 function isInactiveStatus(value: unknown): boolean {
   return typeof value === 'string' && /inactive|archived|disabled|closed|failed|error|degraded|lost/i.test(value)
+}
+
+function isClosedStatus(value: unknown): boolean {
+  return typeof value === 'string' && /closed|completed|won|lost|resolved|archived/i.test(value)
 }
 
 function findNumericField(primaryEntities: PrimaryEntityRecord[]): string | null {
@@ -185,6 +195,7 @@ function deriveDashboardMetrics(
   const activeUsers = users.filter((user) => user.status === 'active').length
   const failedRecords = primaryEntities.filter((entity) => isFailureStatus(entity.status)).length
   const activeRecords = primaryEntities.filter((entity) => isActiveStatus(entity.status)).length
+  const closedRecords = primaryEntities.filter((entity) => isClosedStatus(entity.status)).length
   const inactiveRecords = primaryEntities.filter((entity) => isInactiveStatus(entity.status)).length
   const currentAnomalyScore =
     typeof existingMetrics.anomaly_score === 'number' && Number.isFinite(existingMetrics.anomaly_score)
@@ -203,6 +214,7 @@ function deriveDashboardMetrics(
         : numericField ?? 'total',
     active_users: activeUsers,
     failed_records: failedRecords,
+    closed_records: closedRecords,
     anomaly_score: currentAnomalyScore && currentAnomalyScore !== 0
       ? currentAnomalyScore
       : failedRecords > 0

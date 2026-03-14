@@ -30,6 +30,7 @@ export type SandboxData = {
     primary_metric_label: string
     active_users: number
     failed_records: number
+    closed_records: number
     anomaly_score: number
     active_records?: number
     inactive_records?: number

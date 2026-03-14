@@ -108,15 +108,21 @@ function normalizeDashboardMetrics(metrics: unknown) {
         : typeof record.failed_transactions === 'number'
           ? record.failed_transactions
           : 0
+  const closedRecords = typeof record.closed_records === 'number' ? record.closed_records : 0
 
   const anomalyScore = typeof record.anomaly_score === 'number' ? record.anomaly_score : 0
+  const activeRecords = typeof record.active_records === 'number' ? record.active_records : 0
+  const inactiveRecords = typeof record.inactive_records === 'number' ? record.inactive_records : 0
 
   return {
     primary_metric: primaryMetric,
     primary_metric_label: primaryMetricLabel,
     active_users: activeUsers,
     failed_records: failedRecords,
+    closed_records: closedRecords,
     anomaly_score: anomalyScore,
+    active_records: activeRecords,
+    inactive_records: inactiveRecords,
   }
 }
 
@@ -714,12 +720,12 @@ const Chatbot: React.FC = () => {
                       <strong>{formatMetricValue(metrics.primary_metric)}</strong>
                     </div>
                     <div className="metric-card glass">
-                      <span className="metric-label">Active Users</span>
-                      <strong>{metrics.active_users}</strong>
+                      <span className="metric-label">{`Active ${primaryEntityTabLabel}`}</span>
+                      <strong>{metrics.active_records ?? 0}</strong>
                     </div>
                     <div className="metric-card glass">
-                      <span className="metric-label">{`${primaryEntityTabLabel} Issues`}</span>
-                      <strong>{metrics.failed_records}</strong>
+                      <span className="metric-label">{`${primaryEntityTabLabel} Closed`}</span>
+                      <strong>{metrics.closed_records ?? 0}</strong>
                     </div>
                     <div className="metric-card glass">
                       <span className="metric-label">Anomaly Score</span>

@@ -241,6 +241,19 @@ function hasFailureStatus(value: unknown): boolean {
   return typeof value === 'string' && /(fail|error|blocked|denied|revoked|incident|anomal|suspend|degrad)/i.test(value)
 }
 
+function hasActiveStatus(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    !hasFailureStatus(value) &&
+    !hasClosedStatus(value) &&
+    !/inactive|disabled/i.test(value)
+  )
+}
+
+function hasClosedStatus(value: unknown): boolean {
+  return typeof value === 'string' && /closed|completed|won|lost|resolved|archived/i.test(value)
+}
+
 function getRelatedUserIds(record: PrimaryEntityRecord, validUserIds: Set<string>): string[] {
   return Object.entries(record)
     .filter(([key, value]) => key !== 'id' && key.endsWith('_id') && typeof value === 'string' && validUserIds.has(value))
@@ -268,9 +281,8 @@ function deriveDashboardMetrics(data: SandboxData): SandboxData['dashboard_metri
 
   const activeUsers = data.users.filter((user) => user.status === 'active').length
   const failedEntities = data.primary_entities.filter((entity) => hasFailureStatus(entity.status)).length
-  const activeRecords = data.primary_entities.filter((entity) =>
-    typeof entity.status === 'string' && /active|open|healthy|running|completed/i.test(entity.status),
-  ).length
+  const activeRecords = data.primary_entities.filter((entity) => hasActiveStatus(entity.status)).length
+  const closedRecords = data.primary_entities.filter((entity) => hasClosedStatus(entity.status)).length
   const inactiveRecords = data.primary_entities.filter((entity) =>
     typeof entity.status === 'string' && /inactive|archived|disabled|closed|failed|error|degraded|lost/i.test(entity.status),
   ).length
@@ -283,6 +295,7 @@ function deriveDashboardMetrics(data: SandboxData): SandboxData['dashboard_metri
     primary_metric_label: numericField ?? 'total',
     active_users: activeUsers,
     failed_records: failedEntities,
+    closed_records: closedRecords,
     anomaly_score: Number((((failedEntities * 10) + suspiciousLogs * 3) / Math.max(data.activity_logs.length, 1)).toFixed(2)),
     active_records: activeRecords,
     inactive_records: inactiveRecords,
