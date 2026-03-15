@@ -1266,6 +1266,7 @@ const Chatbot: React.FC = () => {
               </div>
             )}
           </div>
+        </div>
         {/* Mobile-only tools in the sidebar */}
         <div className="sidebar-footer mobile-only" style={{ flexDirection: 'column', gap: '8px', padding: '16px', borderTop: '1px solid var(--glass-border)', background: 'rgba(255, 255, 255, 0.02)' }}>
           <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px', wordBreak: 'break-all' }}>
