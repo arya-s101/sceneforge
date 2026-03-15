@@ -643,7 +643,9 @@ function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
   }
 
   mutatedData.activity_logs.sort(
-    (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
+    (left, right) =>
+      new Date(left.timestamp as string | number).getTime() -
+      new Date(right.timestamp as string | number).getTime(),
   )
   mutatedData.dashboard_metrics = {
     ...deriveDashboardMetrics(mutatedData),
