@@ -50,11 +50,14 @@ export async function storeMemory(scenario: StoreMemoryScenario): Promise<StoreM
   }
   const next = [entry, ...existing].slice(0, 50)
   const now = new Date().toISOString()
+  const domains = next.slice(0, 10).map((s: { domain?: string }) => s.domain ?? 'unknown').join(', ')
+  const productContext = `User has built sandboxes for: ${domains}`
 
   if (data !== null && data !== undefined) {
     await supabase
       .from('memory')
       .update({
+        product_context: productContext,
         past_scenarios: next,
         updated_at: now,
       })
@@ -62,7 +65,7 @@ export async function storeMemory(scenario: StoreMemoryScenario): Promise<StoreM
   } else {
     await supabase.from('memory').insert({
       id: MEMORY_ROW_ID,
-      product_context: null,
+      product_context: productContext,
       past_scenarios: next,
       updated_at: now,
     })
