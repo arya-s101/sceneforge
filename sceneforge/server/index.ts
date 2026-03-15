@@ -19,8 +19,8 @@ import { supabase } from './lib/supabase.ts'
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '')
-const flashModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
-const proModel = genAI.getGenerativeModel({ model: 'gemini-2.0-pro-exp' })
+const flashModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-preview-04-17' })
+const proModel = genAI.getGenerativeModel({ model: 'gemini-2.5-pro-preview-04-17' })
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
 function stripJsonFromMarkdown(text: string): string {
