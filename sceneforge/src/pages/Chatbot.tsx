@@ -440,6 +440,13 @@ const Chatbot: React.FC = () => {
   const [endpointLastResponse, setEndpointLastResponse] = useState<EndpointTestResponse | null>(null)
   const [endpointDisplayedResults, setEndpointDisplayedResults] = useState<EndpointTestRecordResult[]>([])
   const [endpointError, setEndpointError] = useState<string | null>(null)
+  const endpointResultsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (isRunningEndpointTest && endpointResultsRef.current) {
+      endpointResultsRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [isRunningEndpointTest])
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -1451,11 +1458,12 @@ const Chatbot: React.FC = () => {
 
               {activeTab === 'endpoint_tester' ? (
                 <div className="endpoint-tester-panel glass">
-                  <div className="endpoint-tester-header">
-                    <h3 className="endpoint-tester-title">ENDPOINT TESTER</h3>
-                    <div className="endpoint-tester-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
-                  </div>
-                  <div className="endpoint-tester-form">
+                  <div className="endpoint-tester-scroll">
+                    <div className="endpoint-tester-header">
+                      <h3 className="endpoint-tester-title">ENDPOINT TESTER</h3>
+                      <div className="endpoint-tester-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                    </div>
+                    <div className="endpoint-tester-form">
                     <div className="endpoint-form-row">
                       <label className="endpoint-label">Target URL</label>
                       <div className="endpoint-url-row">
@@ -1548,10 +1556,11 @@ const Chatbot: React.FC = () => {
                       ) : null}
                     </div>
                   </div>
-                  {endpointError ? (
-                    <div className="endpoint-error">{endpointError}</div>
-                  ) : null}
-                  {(isRunningEndpointTest || endpointDisplayedResults.length > 0 || endpointLastResponse) ? (
+                    {endpointError ? (
+                      <div className="endpoint-error">{endpointError}</div>
+                    ) : null}
+                    <div ref={endpointResultsRef}>
+                    {(isRunningEndpointTest || endpointDisplayedResults.length > 0 || endpointLastResponse) ? (
                     <div className="endpoint-live-feed">
                       <div className="endpoint-feed-header">
                         {isRunningEndpointTest ? (
@@ -1572,7 +1581,7 @@ const Chatbot: React.FC = () => {
                       ) : null}
                     </div>
                   ) : null}
-                  {endpointLastResponse && !isRunningEndpointTest ? (
+                    {endpointLastResponse && !isRunningEndpointTest ? (
                     <div className="endpoint-report-panel">
                       {(() => {
                         const a = endpointLastResponse.analysis
@@ -1647,7 +1656,9 @@ const Chatbot: React.FC = () => {
                         )
                       })()}
                     </div>
-                  ) : null}
+                    ) : null}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="table-shell glass">

@@ -1600,11 +1600,22 @@
 
 /* Endpoint Tester */
 .endpoint-tester-panel {
-  padding: 20px 24px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border-radius: 0;
   border: 1px solid var(--glass-border);
   font-family: ui-monospace, 'SF Mono', 'Consolas', monospace;
   font-size: 13px;
+}
+
+.endpoint-tester-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+  padding-bottom: 120px;
 }
 
 .endpoint-tester-header {
