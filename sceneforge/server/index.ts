@@ -233,7 +233,7 @@ type ChaosDiff = {
 }
 
 app.use(cors())
-app.use(express.json({ limit: '1mb' }))
+app.use(express.json({ limit: '10mb' }))
 
 function ensureEnv(name: string): string {
   const value = process.env[name]
@@ -725,8 +725,25 @@ app.post(
       'Return only raw JSON.',
     ].join('\n')
 
-    const rawJson = await requestModelJson(QA_REPORT_SYSTEM_PROMPT, prompt)
-    const report = JSON.parse(rawJson.trim()) as QAReportPayload
+    let rawJson: string
+    try {
+      rawJson = await requestModelJson(QA_REPORT_SYSTEM_PROMPT, prompt)
+    } catch (openaiError) {
+      const msg = getErrorMessage(openaiError)
+      response.status(502).json({ error: `QA report generation failed: ${msg}` })
+      return
+    }
+
+    let report: QAReportPayload
+    try {
+      report = JSON.parse(rawJson.trim()) as QAReportPayload
+    } catch {
+      response.status(502).json({
+        error: 'QA report generation returned invalid JSON. Please try again.',
+      })
+      return
+    }
+
     if (!report.generated_at) {
       report.generated_at = new Date().toISOString()
     }
@@ -744,7 +761,13 @@ app.post(
     })
 
     if (error) {
-      throw error
+      const hint = /does not exist|relation\s+["']?reports["']?/i.test(String(error.message))
+        ? ' Ensure the reports table exists (run supabase/migrations/create_reports.sql in Supabase).'
+        : ''
+      response.status(503).json({
+        error: `Failed to save report: ${error.message}.${hint}`,
+      })
+      return
     }
 
     response.status(201).json({

@@ -120,13 +120,22 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   })
 
-  const payload = (await response.json().catch(() => ({ error: 'Invalid server response.' }))) as
-    | T
-    | { error?: string }
+  const raw = await response.text()
+  let payload: T | { error?: string }
+  try {
+    payload = JSON.parse(raw) as T | { error?: string }
+  } catch {
+    const snippet = raw.slice(0, 120).replace(/\s+/g, ' ')
+    throw new Error(
+      response.ok
+        ? 'Invalid server response.'
+        : `Request failed (${response.status}). ${snippet ? `Response: ${snippet}…` : 'Response was not JSON.'}`,
+    )
+  }
 
   if (!response.ok) {
     const apiError = payload as { error?: string }
-    throw new Error(apiError.error ?? 'Request failed.')
+    throw new Error(apiError.error ?? `Request failed (${response.status}).`)
   }
 
   return payload as T
