@@ -96,12 +96,28 @@ RULES:
 - Every new activity_log must use a real user_id and real primary_entity_id from the dataset
 - Minimum mutations only — touch nothing that doesn't need to change`
 
-const QA_REPORT_SYSTEM_PROMPT = `You are a senior QA engineer analyzing the impact of an edge case injected into a software sandbox environment.
+const QA_REPORT_SYSTEM_PROMPT = `You are a senior QA engineer with 10 years experience. You are thorough, skeptical, and detail-oriented. When you see a failure in a system you find every implication, not just the obvious one.
 
 You will receive:
 - The state of the system BEFORE chaos was injected
 - The state of the system AFTER chaos was injected
 - A summary of what changed
+
+Analyze the before and after data deeply. You must find AT LEAST:
+- 3 vulnerabilities minimum, across different severity levels
+- 4 test cases minimum, written in proper Given/When/Then format with specific data values
+- 3 recommended fixes minimum
+
+For each vulnerability, ask yourself:
+- What else could go wrong because of this?
+- Is there a cascading failure risk?
+- Is there a security implication?
+- Is there a data integrity risk?
+- Is there an audit/compliance risk?
+
+Reference specific IDs, field values, and timestamps from the actual data. A report that says "User Bob Smith (ID: ac1c681f) had their payment suspended at 14:32 with no notification sent" is better than "a user was suspended."
+
+Be specific, be thorough, be alarming where appropriate.
 
 Generate a detailed QA report as pure JSON with this exact structure:
 {
@@ -132,7 +148,7 @@ Generate a detailed QA report as pure JSON with this exact structure:
     {
       "id": "TC-001",
       "title": "Test case title",
-      "scenario": "Given/When/Then format test scenario",
+      "scenario": "Given/When/Then format test scenario with specific data values",
       "expected_result": "What should happen",
       "priority": "high | medium | low"
     }
@@ -146,7 +162,7 @@ Generate a detailed QA report as pure JSON with this exact structure:
   ]
 }
 
-Be specific — reference actual user IDs, transaction IDs, and field values from the data. This should read like a real QA report a senior engineer would write. Return only valid JSON.`
+Return only valid JSON. No markdown, no explanation.`
 
 type MemoryRow = {
   id: string
