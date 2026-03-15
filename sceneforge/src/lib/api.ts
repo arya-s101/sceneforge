@@ -109,7 +109,10 @@ export type ReportResponse = {
   report: QAReport
 }
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
+// In dev, use same origin so Vite proxy forwards /api to the backend (no CORS, no env needed).
+const API_URL =
+  (typeof import.meta.env.VITE_API_URL === 'string' && import.meta.env.VITE_API_URL.trim()) ||
+  (import.meta.dev ? '' : 'http://localhost:3001')
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
