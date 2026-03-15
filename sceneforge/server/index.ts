@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors'
 import OpenAI from 'openai'
 
+import { getMemoryStatus, retrieveMemory, storeMemory, type StoreMemoryResult } from './lib/memory.ts'
 import {
   createSandboxRecord,
   createTemplateRecord,
@@ -96,6 +97,125 @@ RULES:
 - Every new activity_log must use a real user_id and real primary_entity_id from the dataset
 - Minimum mutations only — touch nothing that doesn't need to change`
 
+const QA_REPORT_SYSTEM_PROMPT = `You are a senior QA engineer with 10 years experience. You are thorough, skeptical, and detail-oriented. When you see a failure in a system you find every implication, not just the obvious one.
+
+You will receive:
+- The state of the system BEFORE chaos was injected
+- The state of the system AFTER chaos was injected
+- A summary of what changed
+
+Analyze the before and after data deeply. You must find AT LEAST:
+- 3 vulnerabilities minimum, across different severity levels
+- 4 test cases minimum, written in proper Given/When/Then format with specific data values
+- 3 recommended fixes minimum
+
+For each vulnerability, ask yourself:
+- What else could go wrong because of this?
+- Is there a cascading failure risk?
+- Is there a security implication?
+- Is there a data integrity risk?
+- Is there an audit/compliance risk?
+
+Reference specific IDs, field values, and timestamps from the actual data. A report that says "User Bob Smith (ID: ac1c681f) had their payment suspended at 14:32 with no notification sent" is better than "a user was suspended."
+
+Be specific, be thorough, be alarming where appropriate.
+
+Generate a detailed QA report as pure JSON with this exact structure:
+{
+  "report_title": "QA Edge Case Report — [chaos type]",
+  "generated_at": "[ISO timestamp]",
+  "chaos_type": "[chaos type]",
+  "executive_summary": "2-3 sentence plain English summary of what happened and its impact",
+  "what_happened": [
+    "Specific thing that changed 1",
+    "Specific thing that changed 2"
+  ],
+  "vulnerabilities": [
+    {
+      "title": "Vulnerability name",
+      "severity": "critical | high | medium | low",
+      "description": "What the vulnerability is",
+      "affected_component": "Which part of the system"
+    }
+  ],
+  "affected_systems": [
+    {
+      "system": "System name",
+      "impact": "critical | high | medium | low",
+      "details": "How it was affected"
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "title": "Test case title",
+      "scenario": "Given/When/Then format test scenario with specific data values",
+      "expected_result": "What should happen",
+      "priority": "high | medium | low"
+    }
+  ],
+  "recommended_fixes": [
+    {
+      "priority": 1,
+      "fix": "What to fix",
+      "rationale": "Why this matters"
+    }
+  ]
+}
+
+Return only valid JSON. No markdown, no explanation.`
+
+const ENDPOINT_TEST_ANALYSIS_PROMPT = `You are a QA engineer analyzing HTTP test results from firing synthetic data at a real API endpoint.
+
+You will receive:
+- The target URL that was tested
+- The HTTP method used
+- Each request's record ID, response status, duration, and response body
+- Whether chaos (broken/edge case data) was used
+
+Requirements:
+- You MUST produce at least 3 findings. Do not stop at 2 — dig into timeouts, status codes, and response patterns.
+- If chaos was injected and the endpoint returned 2xx (e.g. 201) for records with broken or invalid data, you MUST include at least one finding that calls this out: the endpoint accepted chaos/malformed data without validation — that is a real vulnerability (e.g. "Endpoint accepted chaos-injected payload with status 201 — no server-side validation").
+- Every test case MUST reference specific record IDs that failed or behaved unexpectedly (e.g. "Record deal-xyz returned 500", "Record user-abc timed out").
+
+Analyze the results and return pure JSON:
+{
+  "summary": "2-3 sentence summary of overall endpoint health",
+  "total_requests": number,
+  "passed": number,
+  "failed": number,
+  "avg_response_time_ms": number,
+  "findings": [
+    {
+      "severity": "critical | high | medium | low | info",
+      "title": "Finding title",
+      "description": "Specific finding referencing actual record IDs and response codes",
+      "affected_records": ["record_id_1", "record_id_2"]
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "title": "Test case title",
+      "scenario": "Given/When/Then — include specific record IDs",
+      "expected_result": "What should happen",
+      "actual_result": "What actually happened for the specific record(s)",
+      "status": "pass | fail | warning",
+      "priority": "high | medium | low"
+    }
+  ],
+  "recommended_fixes": [
+    {
+      "priority": 1,
+      "fix": "What to fix",
+      "rationale": "Why"
+    }
+  ],
+  "chaos_findings": "If chaos was used, what additional vulnerabilities were exposed. Otherwise null or empty string."
+}
+
+Return only valid JSON. No markdown.`
+
 type MemoryRow = {
   id: string
   product_context: string | null
@@ -117,6 +237,79 @@ type TemplateRow = {
   description: string
   data: SandboxData
   created_at: string
+}
+
+type ReportRow = {
+  id: string
+  sandbox_id: string
+  chaos_type: string
+  report: QAReportPayload
+  created_at: string
+}
+
+type QAReportPayload = {
+  report_title?: string
+  generated_at?: string
+  chaos_type?: string
+  executive_summary?: string
+  what_happened?: string[]
+  vulnerabilities?: Array<{
+    title?: string
+    severity?: string
+    description?: string
+    affected_component?: string
+  }>
+  affected_systems?: Array<{
+    system?: string
+    impact?: string
+    details?: string
+  }>
+  test_cases?: Array<{
+    id?: string
+    title?: string
+    scenario?: string
+    expected_result?: string
+    priority?: string
+  }>
+  recommended_fixes?: Array<{
+    priority?: number
+    fix?: string
+    rationale?: string
+  }>
+}
+
+type EndpointTestRecordResult = {
+  record_id: string
+  status: number
+  ok: boolean
+  duration_ms: number
+  response_body: string | null
+  error: string | null
+}
+
+type EndpointTestAnalysisPayload = {
+  summary?: string
+  total_requests?: number
+  passed?: number
+  failed?: number
+  avg_response_time_ms?: number
+  findings?: Array<{
+    severity?: string
+    title?: string
+    description?: string
+    affected_records?: string[]
+  }>
+  test_cases?: Array<{
+    id?: string
+    title?: string
+    scenario?: string
+    expected_result?: string
+    actual_result?: string
+    status?: string
+    priority?: string
+  }>
+  recommended_fixes?: Array<{ priority?: number; fix?: string; rationale?: string }>
+  chaos_findings?: string | null
 }
 
 type ChaosMutation<TChanges> = {
@@ -142,7 +335,7 @@ type ChaosDiff = {
 }
 
 app.use(cors())
-app.use(express.json({ limit: '1mb' }))
+app.use(express.json({ limit: '10mb' }))
 
 function ensureEnv(name: string): string {
   const value = process.env[name]
@@ -242,12 +435,16 @@ async function getTemplateById(id: string): Promise<TemplateRow> {
   return data as TemplateRow
 }
 
-async function generateFreshSandbox(description: string) {
-  const memory = await getMemoryRecord()
+async function generateFreshSandbox(
+  description: string,
+  memoryContext?: string,
+): Promise<{ sandbox: SandboxRow; memoryResult?: StoreMemoryResult }> {
+  const promptWithMemory = memoryContext
+    ? `${memoryContext}\n\nNow generate a new sandbox for: ${description}`
+    : description
   const prompt = [
-    `Product context: ${memory?.product_context ?? DEFAULT_PRODUCT_CONTEXT}`,
-    `Past scenarios: ${JSON.stringify(memory?.past_scenarios ?? [])}`,
-    `Requested scenario: ${description}`,
+    `Product context: ${DEFAULT_PRODUCT_CONTEXT}`,
+    `Requested scenario: ${promptWithMemory}`,
     'Return only raw JSON.',
   ].join('\n\n')
 
@@ -260,9 +457,17 @@ async function generateFreshSandbox(description: string) {
     throw error
   }
 
-  await appendScenarioToMemory(description)
+  const memoryResult = await storeMemory({
+    description,
+    domain: data.schema_info?.domain ?? 'unknown',
+    schema: {
+      primary_entity: data.schema_info?.primary_entity_name,
+      fields: Object.keys((data.primary_entities ?? [])[0] ?? {}),
+    },
+    metrics: data.dashboard_metrics ?? {},
+  })
 
-  return sandbox
+  return { sandbox, memoryResult }
 }
 
 async function requestModelJson(systemPrompt: string, prompt: string): Promise<string> {
@@ -480,12 +685,30 @@ app.post(
     }
 
     ensureSupabaseEnv()
-    const sandbox = await generateFreshSandbox(description)
+    const memoryContext = await retrieveMemory(description)
+    const { sandbox, memoryResult } = await generateFreshSandbox(description, memoryContext)
 
     response.status(201).json({
       sandbox_id: sandbox.id,
       data: sandbox.data,
+      expires_at: sandbox.expires_at,
+      memory: memoryResult
+        ? {
+            backend: memoryResult.backend,
+            count: memoryResult.count,
+            lastScenario: memoryResult.lastDescription,
+          }
+        : undefined,
     })
+  }),
+)
+
+app.get(
+  '/api/memory-status',
+  asyncRoute(async (_request, response) => {
+    ensureSupabaseEnv()
+    const status = await getMemoryStatus()
+    response.json(status)
   }),
 )
 
@@ -542,11 +765,20 @@ app.post(
 
     ensureSupabaseEnv()
     const template = await getTemplateById(templateId)
-    const sandbox = await generateFreshSandbox(template.description)
+    const memoryContext = await retrieveMemory(template.description)
+    const { sandbox, memoryResult } = await generateFreshSandbox(template.description, memoryContext)
 
     response.status(201).json({
       sandbox_id: sandbox.id,
       data: sandbox.data,
+      expires_at: sandbox.expires_at,
+      memory: memoryResult
+        ? {
+            backend: memoryResult.backend,
+            count: memoryResult.count,
+            lastScenario: memoryResult.lastDescription,
+          }
+        : undefined,
     })
   }),
 )
@@ -591,8 +823,274 @@ app.post(
     response.json({
       sandbox_id: sandboxId,
       data: mutatedData,
+      expires_at: sandbox.expires_at,
       changedIds,
       chaos_summary,
+    })
+  }),
+)
+
+app.post(
+  '/api/report',
+  asyncRoute(async (request, response) => {
+    const sandboxId =
+      typeof request.body.sandbox_id === 'string' ? request.body.sandbox_id.trim() : ''
+    const preChaosData = request.body.pre_chaos_data
+    const postChaosData = request.body.post_chaos_data
+    const changedIds = Array.isArray(request.body.changed_ids)
+      ? (request.body.changed_ids as string[])
+      : []
+    const chaosSummary =
+      typeof request.body.chaos_summary === 'string' ? request.body.chaos_summary.trim() : ''
+    const chaosType =
+      typeof request.body.chaos_type === 'string' ? request.body.chaos_type.trim() : ''
+
+    if (!sandboxId || !postChaosData) {
+      response.status(400).json({ error: 'sandbox_id and post_chaos_data are required.' })
+      return
+    }
+
+    const prompt = [
+      `Chaos type: ${chaosType}`,
+      `Chaos summary: ${chaosSummary}`,
+      `Changed IDs: ${JSON.stringify(changedIds)}`,
+      '',
+      'Pre-chaos data:',
+      JSON.stringify(preChaosData ?? {}),
+      '',
+      'Post-chaos data:',
+      JSON.stringify(postChaosData),
+      '',
+      'Return only raw JSON.',
+    ].join('\n')
+
+    let rawJson: string
+    try {
+      rawJson = await requestModelJson(QA_REPORT_SYSTEM_PROMPT, prompt)
+    } catch (openaiError) {
+      const msg = getErrorMessage(openaiError)
+      response.status(502).json({ error: `QA report generation failed: ${msg}` })
+      return
+    }
+
+    let report: QAReportPayload
+    try {
+      report = JSON.parse(rawJson.trim()) as QAReportPayload
+    } catch {
+      response.status(502).json({
+        error: 'QA report generation returned invalid JSON. Please try again.',
+      })
+      return
+    }
+
+    if (!report.generated_at) {
+      report.generated_at = new Date().toISOString()
+    }
+    if (!report.chaos_type) {
+      report.chaos_type = chaosType
+    }
+
+    const reportId = randomUUID()
+    ensureSupabaseEnv()
+    const { error } = await supabase.from('reports').insert({
+      id: reportId,
+      sandbox_id: sandboxId,
+      chaos_type: chaosType,
+      report,
+    })
+
+    if (error) {
+      const hint = /does not exist|relation\s+["']?reports["']?/i.test(String(error.message))
+        ? ' Ensure the reports table exists (run supabase/migrations/create_reports.sql in Supabase).'
+        : ''
+      response.status(503).json({
+        error: `Failed to save report: ${error.message}.${hint}`,
+      })
+      return
+    }
+
+    response.status(201).json({
+      report_id: reportId,
+      report,
+    })
+  }),
+)
+
+app.post('/api/mock-endpoint', (request, response) => {
+  const body = request.body as Record<string, unknown>
+
+  if (!body?.id) {
+    response.status(400).json({ error: 'Missing required field: id' })
+    return
+  }
+  if (body.status === 'payment_suspended' || body.status === 'suspended') {
+    response.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_SUSPENDED' })
+    return
+  }
+  if (typeof body.amount === 'number' && body.amount < 0) {
+    response.status(422).json({ error: 'Invalid amount: must be positive', code: 'INVALID_AMOUNT' })
+    return
+  }
+  if (body.status === 'failed') {
+    response.status(402).json({ error: 'Payment failed', code: 'PAYMENT_FAILED' })
+    return
+  }
+  if (body.action === 'entity_failed') {
+    response.status(500).json({ error: 'Internal processing error', code: 'PROCESSING_ERROR' })
+    return
+  }
+  if (Math.random() < 0.1) {
+    response.status(503).json({ error: 'Service temporarily unavailable' })
+    return
+  }
+
+  response.status(200).json({
+    success: true,
+    processed_id: body.id,
+    message: 'Record processed successfully',
+  })
+})
+
+const ENDPOINT_TEST_CHAOS_TYPE = 'data_anomaly'
+
+app.post(
+  '/api/test-endpoint',
+  asyncRoute(async (request, response) => {
+    const sandboxId =
+      typeof request.body.sandbox_id === 'string' ? request.body.sandbox_id.trim() : ''
+    const targetUrl =
+      typeof request.body.target_url === 'string' ? request.body.target_url.trim() : ''
+    const httpMethod =
+      request.body.http_method === 'GET' || request.body.http_method === 'POST' ||
+      request.body.http_method === 'PUT' || request.body.http_method === 'DELETE'
+        ? request.body.http_method
+        : 'GET'
+    const entityType =
+      request.body.entity_type === 'users' || request.body.entity_type === 'primary_entities' ||
+      request.body.entity_type === 'activity_logs'
+        ? request.body.entity_type
+        : 'primary_entities'
+    const injectChaos = Boolean(request.body.inject_chaos)
+
+    if (!sandboxId || !targetUrl) {
+      response.status(400).json({ error: 'sandbox_id and target_url are required.' })
+      return
+    }
+
+    ensureSupabaseEnv()
+    const sandbox = await getSandboxById(sandboxId)
+    let dataToUse = sandbox.data
+
+    if (injectChaos) {
+      const prompt = [
+        `Chaos type: ${ENDPOINT_TEST_CHAOS_TYPE}`,
+        `Current sandbox description: ${sandbox.description}`,
+        `Current sandbox data: ${JSON.stringify(sandbox.data)}`,
+        'Return only raw JSON.',
+      ].join('\n\n')
+      const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
+      const diff = parseChaosDiff(rawJson)
+      const { mutatedData } = applyChaosDiff(sandbox.data, diff)
+      dataToUse = mutatedData
+    }
+
+    const records: Array<Record<string, unknown> & { id: string }> =
+      entityType === 'users'
+        ? (dataToUse.users as Array<Record<string, unknown> & { id: string }>)
+        : entityType === 'activity_logs'
+          ? (dataToUse.activity_logs as Array<Record<string, unknown> & { id: string }>)
+          : (dataToUse.primary_entities as Array<Record<string, unknown> & { id: string }>)
+
+    if (!Array.isArray(records) || records.length === 0) {
+      response.status(400).json({ error: `No records found for entity_type "${entityType}".` })
+      return
+    }
+
+    function truncateResponseBody(body: string): string {
+      try {
+        const parsed = JSON.parse(body)
+        const formatted = JSON.stringify(parsed, null, 2)
+        const truncated = formatted.slice(0, 300)
+        return truncated + (formatted.length > 300 ? '...' : '')
+      } catch {
+        return body.slice(0, 300) + (body.length > 300 ? '...' : '')
+      }
+    }
+
+    const results = await Promise.allSettled(
+      records.map(async (record) => {
+        const start = Date.now()
+        try {
+          const res = await fetch(targetUrl, {
+            method: httpMethod,
+            headers: { 'Content-Type': 'application/json' },
+            body: httpMethod !== 'GET' ? JSON.stringify(record) : undefined,
+            signal: AbortSignal.timeout(5000),
+          })
+          const duration = Date.now() - start
+          const body = await res.text()
+          return {
+            record_id: record.id,
+            status: res.status,
+            ok: res.ok,
+            duration_ms: duration,
+            response_body: truncateResponseBody(body),
+            error: null,
+          } satisfies EndpointTestRecordResult
+        } catch (err: unknown) {
+          return {
+            record_id: record.id,
+            status: 0,
+            ok: false,
+            duration_ms: Date.now() - start,
+            response_body: null,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies EndpointTestRecordResult
+        }
+      }),
+    )
+
+    const testResults: EndpointTestRecordResult[] = results.map((r) =>
+      r.status === 'fulfilled' ? r.value : { record_id: 'unknown', status: 0, ok: false, duration_ms: 0, response_body: null, error: 'Promise rejected' },
+    )
+
+    const passed = testResults.filter((t) => t.ok).length
+    const failed = testResults.filter((t) => !t.ok).length
+    const total = testResults.length
+    const avgResponseTimeMs =
+      total > 0 ? Math.round(testResults.reduce((sum, t) => sum + t.duration_ms, 0) / total) : 0
+
+    let analysis: EndpointTestAnalysisPayload = {}
+    try {
+      const analysisPrompt = [
+        `Target URL: ${targetUrl}`,
+        `HTTP method: ${httpMethod}`,
+        `Entity type: ${entityType}`,
+        `Inject chaos: ${injectChaos}`,
+        '',
+        'Per-request results:',
+        JSON.stringify(testResults, null, 2),
+        '',
+        'Return only valid JSON.',
+      ].join('\n')
+      const rawAnalysis = await requestModelJson(ENDPOINT_TEST_ANALYSIS_PROMPT, analysisPrompt)
+      analysis = JSON.parse(rawAnalysis.trim()) as EndpointTestAnalysisPayload
+    } catch {
+      analysis = {
+        summary: 'Analysis could not be generated.',
+        total_requests: total,
+        passed,
+        failed,
+        avg_response_time_ms: avgResponseTimeMs,
+      }
+    }
+
+    response.json({
+      test_results: testResults,
+      analysis,
+      total,
+      passed,
+      failed,
     })
   }),
 )
@@ -630,6 +1128,13 @@ app.get(
     ensureSupabaseEnv()
     const sandboxId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id
     const sandbox = await getSandboxById(sandboxId)
+
+    if (new Date(sandbox.expires_at).getTime() <= Date.now()) {
+      response.json({
+        expired: true,
+      })
+      return
+    }
 
     response.json(sandbox)
   }),

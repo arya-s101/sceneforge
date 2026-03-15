@@ -1,16 +1,23 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   applyChaos,
   deleteSandboxRecord,
   generateFromTemplate,
+  generateReport,
   generateSandbox,
+  getMemoryStatus,
   getSandbox,
   getSandboxes,
   getTemplates,
   saveTemplate,
+  testEndpoint,
   type ActivityLogRecord,
+  type EndpointTestRecordResult,
+  type EndpointTestResponse,
+  type MemoryIndicator,
   type PrimaryEntityRecord,
+  type QAReport,
   type SandboxSummary,
   type SandboxResponse,
   type TemplateSummary,
@@ -26,7 +33,7 @@ const examplePrompts = [
 ]
 
 const chaosTypes = ['failed_payment', 'permission_conflict', 'data_anomaly'] as const
-type TabId = 'users' | 'primary_entities' | 'activity_logs' | 'feature_flags'
+type TabId = 'users' | 'primary_entities' | 'activity_logs' | 'feature_flags' | 'endpoint_tester'
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 type ChaosHighlights = {
   chaosSummary: string
@@ -42,7 +49,14 @@ type PreviousPromptItem = {
   sandbox_id: string
   timestamp: number
 }
+type SessionReportItem = {
+  report_id: string
+  report: QAReport
+  chaos_type: string
+  generated_at: string
+}
 type TableRow = Record<string, unknown>
+type PermissionTier = 'admin' | 'standard' | 'restricted'
 
 const TEMPLATE_CACHE_STORAGE_KEY = 'sceneforge_templates_cache'
 const PINNED_COLUMNS = [
@@ -153,6 +167,33 @@ function formatMetricValue(value: number): string {
     minimumFractionDigits: hasFraction ? 2 : 0,
     maximumFractionDigits: hasFraction ? 2 : 2,
   })
+}
+
+function getTimeRemaining(expiresAt: string) {
+  const diff = new Date(expiresAt).getTime() - Date.now()
+  if (diff <= 0) return 'Expired'
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+  return `${hours}h ${minutes}m remaining`
+}
+
+function getRelatedUserIdsFromEntity(entity: PrimaryEntityRecord): string[] {
+  return Object.entries(entity)
+    .filter(([key, value]) => key.endsWith('_id') && key !== 'id' && typeof value === 'string')
+    .map(([, value]) => value as string)
+}
+
+function getPermissionTier(role: string): PermissionTier {
+  const r = role.toLowerCase()
+  if (r.includes('admin') || r.includes('manager') || r.includes('owner')) return 'admin'
+  if (
+    r.includes('viewer') ||
+    r.includes('read') ||
+    r.includes('guest') ||
+    r.includes('patient') ||
+    r.includes('shopper')
+  ) return 'restricted'
+  return 'standard'
 }
 
 function renderSkeletonTableRows(rowCount = 8, columnCount = 6) {
@@ -384,6 +425,31 @@ const Chatbot: React.FC = () => {
   const [templateName, setTemplateName] = useState('')
   const [isCopyLinkSuccess, setIsCopyLinkSuccess] = useState(false)
   const [isChaosButtonFlashing, setIsChaosButtonFlashing] = useState(false)
+  const [timeRemaining, setTimeRemaining] = useState<string | null>(null)
+  const [selectedViewingUserId, setSelectedViewingUserId] = useState<string>('')
+  const [isChaosBannerDismissed, setIsChaosBannerDismissed] = useState(false)
+  const [lastChaosType, setLastChaosType] = useState<string>('')
+  const [sessionReports, setSessionReports] = useState<SessionReportItem[]>([])
+  const [reportModalOpen, setReportModalOpen] = useState(false)
+  const [reportModalContent, setReportModalContent] = useState<QAReport | null>(null)
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false)
+  const preChaosDataRef = useRef<LoadedSandboxData | null>(null)
+  const [endpointTargetUrl, setEndpointTargetUrl] = useState('')
+  const [endpointMethod, setEndpointMethod] = useState<'GET' | 'POST' | 'PUT' | 'DELETE'>('POST')
+  const [endpointEntityType, setEndpointEntityType] = useState<'users' | 'primary_entities' | 'activity_logs'>('primary_entities')
+  const [injectChaos, setInjectChaos] = useState(false)
+  const [isRunningEndpointTest, setIsRunningEndpointTest] = useState(false)
+  const [endpointLastResponse, setEndpointLastResponse] = useState<EndpointTestResponse | null>(null)
+  const [endpointDisplayedResults, setEndpointDisplayedResults] = useState<EndpointTestRecordResult[]>([])
+  const [endpointError, setEndpointError] = useState<string | null>(null)
+  const [memoryIndicator, setMemoryIndicator] = useState<MemoryIndicator | null>(null)
+  const endpointResultsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (isRunningEndpointTest && endpointResultsRef.current) {
+      endpointResultsRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [isRunningEndpointTest])
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 
   useEffect(() => {
@@ -426,6 +492,29 @@ const Chatbot: React.FC = () => {
     return () => window.clearTimeout(timeoutId)
   }, [isChaosButtonFlashing])
 
+  useEffect(() => {
+    if (!sandbox?.expires_at) {
+      setTimeRemaining(null)
+      return undefined
+    }
+
+    const updateRemaining = () => {
+      const nextRemaining = getTimeRemaining(sandbox.expires_at)
+      setTimeRemaining(nextRemaining)
+
+      if (nextRemaining === 'Expired') {
+        setSandbox(null)
+        setExpiredSandboxMessage('This sandbox has expired')
+        clearSandboxUrl()
+      }
+    }
+
+    updateRemaining()
+    const intervalId = window.setInterval(updateRemaining, 60_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [sandbox?.expires_at])
+
   const loadSidebarData = useCallback(async () => {
     setIsLoadingPrompts(true)
     setIsLoadingTemplates(true)
@@ -450,6 +539,12 @@ const Chatbot: React.FC = () => {
   useEffect(() => {
     void loadSidebarData()
   }, [loadSidebarData])
+
+  useEffect(() => {
+    getMemoryStatus()
+      .then(setMemoryIndicator)
+      .catch(() => setMemoryIndicator(null))
+  }, [])
 
   const restoreSandbox = useCallback(
     async (sandboxId: string, promptText?: string) => {
@@ -521,6 +616,38 @@ const Chatbot: React.FC = () => {
     }
   }, [sandbox])
   const metrics = sandboxData?.dashboard_metrics
+  const viewingUsers = useMemo(() => sandboxData?.users ?? [], [sandboxData])
+  const selectedViewingUser = useMemo(
+    () => viewingUsers.find((user) => user.id === selectedViewingUserId) ?? null,
+    [selectedViewingUserId, viewingUsers],
+  )
+  const currentViewingRole = selectedViewingUser?.role ?? 'admin'
+  const currentPermissionTier = getPermissionTier(currentViewingRole)
+
+  useEffect(() => {
+    if (!viewingUsers.length) {
+      setSelectedViewingUserId('')
+      return
+    }
+
+    const hasSelectedUser = viewingUsers.some((user) => user.id === selectedViewingUserId)
+    if (hasSelectedUser) {
+      return
+    }
+
+    const preferredUser =
+      viewingUsers.find((user) => getPermissionTier(user.role) === 'admin') ??
+      viewingUsers[0]
+
+    setSelectedViewingUserId(preferredUser.id)
+  }, [selectedViewingUserId, viewingUsers])
+
+  useEffect(() => {
+    if (currentPermissionTier === 'restricted' && activeTab === 'activity_logs') {
+      setActiveTab('primary_entities')
+    }
+  }, [activeTab, currentPermissionTier])
+
   const changedRowIdSet = useMemo(() => new Set(changedRowIds), [changedRowIds])
   const tabChangeCounts = useMemo(
     () => ({
@@ -537,19 +664,37 @@ const Chatbot: React.FC = () => {
       return null
     }
 
+    const filteredPrimaryEntities = currentPermissionTier !== 'admin' && selectedViewingUser
+      ? sandboxData.primary_entities.filter((entity) =>
+          getRelatedUserIdsFromEntity(entity).includes(selectedViewingUser.id),
+        )
+      : sandboxData.primary_entities
+    const allowedPrimaryEntityIds = new Set(filteredPrimaryEntities.map((entity) => entity.id))
+    const filteredActivityLogs = currentPermissionTier === 'standard' && selectedViewingUser
+      ? sandboxData.activity_logs.filter(
+          (log) =>
+            log.user_id === selectedViewingUser.id ||
+            allowedPrimaryEntityIds.has(log.primary_entity_id),
+        )
+      : sandboxData.activity_logs
+
+    if (currentPermissionTier === 'restricted' && activeTab === 'activity_logs') {
+      return <div className="access-restricted-panel">Access Restricted</div>
+    }
+
     switch (activeTab) {
       case 'users':
         return renderUsersTable(sandboxData.users, Array.from(changedRowIdSet))
       case 'primary_entities':
-        return renderPrimaryEntitiesTable(sandboxData.primary_entities, Array.from(changedRowIdSet))
+        return renderPrimaryEntitiesTable(filteredPrimaryEntities, Array.from(changedRowIdSet))
       case 'activity_logs':
-        return renderActivityLogsTable(sandboxData.activity_logs, Array.from(changedRowIdSet))
+        return renderActivityLogsTable(filteredActivityLogs, Array.from(changedRowIdSet))
       case 'feature_flags':
         return renderFeatureFlagsTable(sandboxData.feature_flags, changedFeatureFlags)
       default:
         return null
     }
-  }, [activeTab, changedFeatureFlags, changedRowIdSet, sandboxData])
+  }, [activeTab, changedFeatureFlags, changedRowIdSet, currentPermissionTier, sandboxData, selectedViewingUser])
 
   async function handleCopyLink() {
     if (!sandbox) {
@@ -579,12 +724,14 @@ const Chatbot: React.FC = () => {
     setChangedRowIds([])
     setChangedFeatureFlags([])
     setIsTemplateFormOpen(false)
+    setIsChaosBannerDismissed(false)
 
     try {
       const result = await generateSandbox(description)
       setSandbox(result)
       setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
+      if (result.memory) setMemoryIndicator(result.memory)
       setPreviousPrompts((current) => [
         { prompt: description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
         ...current.filter((item) => item.sandbox_id !== result.sandbox_id),
@@ -607,6 +754,7 @@ const Chatbot: React.FC = () => {
     setStatusMessage(null)
 
     const chaosType = chaosTypes[Math.floor(Math.random() * chaosTypes.length)]
+    preChaosDataRef.current = JSON.parse(JSON.stringify(sandbox.data)) as LoadedSandboxData
 
     try {
       const result = await applyChaos(sandbox.sandbox_id, chaosType)
@@ -629,11 +777,225 @@ const Chatbot: React.FC = () => {
       setChangedFeatureFlags([])
       setChaosIndicator(result.chaos_summary)
       setIsChaosButtonFlashing(true)
+      setIsChaosBannerDismissed(false)
+      setLastChaosType(chaosType)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
       setIsApplyingChaos(false)
     }
+  }
+
+  async function handleGenerateReport() {
+    if (!sandbox || !chaosHighlights || isGeneratingReport) {
+      return
+    }
+    const preData = preChaosDataRef.current
+    if (!preData) {
+      setErrorMessage('No pre-chaos snapshot available. Inject chaos first.')
+      return
+    }
+    setIsGeneratingReport(true)
+    setErrorMessage(null)
+    try {
+      const { report_id, report } = await generateReport({
+        sandbox_id: sandbox.sandbox_id,
+        pre_chaos_data: preData,
+        post_chaos_data: sandbox.data,
+        changed_ids: changedRowIds,
+        chaos_summary: chaosHighlights.chaosSummary,
+        chaos_type: lastChaosType || 'unknown',
+      })
+      setSessionReports((prev) => [
+        {
+          report_id,
+          report,
+          chaos_type: lastChaosType || 'unknown',
+          generated_at: report.generated_at ?? new Date().toISOString(),
+        },
+        ...prev,
+      ])
+      setReportModalContent(report)
+      setReportModalOpen(true)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsGeneratingReport(false)
+    }
+  }
+
+  function handleOpenReport(item: SessionReportItem) {
+    setReportModalContent(item.report)
+    setReportModalOpen(true)
+  }
+
+  function handleDownloadReport() {
+    const report = reportModalContent
+    if (!report) return
+    const lines: string[] = []
+    lines.push(report.report_title ?? 'QA Edge Case Report')
+    lines.push('')
+    lines.push('Generated: ' + (report.generated_at ?? '—'))
+    lines.push('Chaos type: ' + (report.chaos_type ?? '—'))
+    lines.push('')
+    lines.push('EXECUTIVE SUMMARY')
+    lines.push('────────────────')
+    lines.push(report.executive_summary ?? '')
+    lines.push('')
+    if (report.what_happened?.length) {
+      lines.push('WHAT HAPPENED')
+      lines.push('─────────────')
+      report.what_happened.forEach((s, i) => lines.push(`${i + 1}. ${s}`))
+      lines.push('')
+    }
+    if (report.vulnerabilities?.length) {
+      lines.push('VULNERABILITIES')
+      lines.push('───────────────')
+      report.vulnerabilities.forEach((v) => {
+        lines.push(`- [${(v.severity ?? '').toUpperCase()}] ${v.title ?? ''}`)
+        lines.push(`  ${v.description ?? ''}`)
+        lines.push(`  Affected: ${v.affected_component ?? '—'}`)
+      })
+      lines.push('')
+    }
+    if (report.affected_systems?.length) {
+      lines.push('AFFECTED SYSTEMS')
+      lines.push('────────────────')
+      report.affected_systems.forEach((a) => {
+        lines.push(`- ${a.system ?? '—'} [${(a.impact ?? '').toUpperCase()}]`)
+        lines.push(`  ${a.details ?? ''}`)
+      })
+      lines.push('')
+    }
+    if (report.test_cases?.length) {
+      lines.push('TEST CASES')
+      lines.push('───────────')
+      report.test_cases.forEach((tc) => {
+        lines.push(`${tc.id ?? '—'} [${(tc.priority ?? '').toUpperCase()}]`)
+        lines.push(`Title: ${tc.title ?? '—'}`)
+        lines.push(`Scenario: ${tc.scenario ?? '—'}`)
+        lines.push(`Expected: ${tc.expected_result ?? '—'}`)
+        lines.push('')
+      })
+    }
+    if (report.recommended_fixes?.length) {
+      lines.push('RECOMMENDED FIXES')
+      lines.push('─────────────────')
+      report.recommended_fixes.forEach((r) => {
+        lines.push(`${r.priority ?? ''}. ${r.fix ?? '—'}`)
+        lines.push(`   Rationale: ${r.rationale ?? '—'}`)
+      })
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qa-report-${report.chaos_type ?? 'report'}-${(report.generated_at ?? '').slice(0, 10)}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function handleRunEndpointTest(useChaos: boolean) {
+    if (!sandbox || isRunningEndpointTest) return
+    const url = (useChaos ? endpointTargetUrl : endpointTargetUrl) || endpointTargetUrl.trim()
+    if (!url) {
+      setEndpointError('Enter a target URL.')
+      return
+    }
+    setEndpointError(null)
+    setEndpointDisplayedResults([])
+    setEndpointLastResponse(null)
+    setIsRunningEndpointTest(true)
+    const doChaos = useChaos || injectChaos
+    try {
+      const res = await testEndpoint({
+        sandbox_id: sandbox.sandbox_id,
+        target_url: url,
+        http_method: endpointMethod,
+        entity_type: endpointEntityType,
+        inject_chaos: doChaos,
+      })
+      setEndpointLastResponse(res)
+      setEndpointDisplayedResults([])
+      const results = res.test_results
+      for (let i = 0; i < results.length; i++) {
+        await new Promise((r) => setTimeout(r, 80 + Math.random() * 70))
+        setEndpointDisplayedResults((prev) => [...prev, results[i]])
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err)
+      const unreachable = /fetch|network|failed to fetch|could not reach/i.test(msg)
+      setEndpointError(unreachable ? `Could not reach ${url} — make sure your server is running.` : msg)
+    } finally {
+      setIsRunningEndpointTest(false)
+    }
+  }
+
+  function handleDownloadEndpointReport() {
+    const res = endpointLastResponse
+    if (!res) return
+    const lines: string[] = []
+    lines.push('ENDPOINT TEST REPORT')
+    lines.push('')
+    lines.push(`Target: ${endpointTargetUrl}`)
+    lines.push(`Method: ${endpointMethod}`)
+    lines.push(`Entity: ${endpointEntityType}`)
+    lines.push(`Total: ${res.total}  Passed: ${res.passed}  Failed: ${res.failed}`)
+    lines.push('')
+    lines.push('PER-REQUEST RESULTS')
+    lines.push('───────────────────')
+    res.test_results.forEach((t) => {
+      lines.push(`${t.ok ? '✓' : '✗'} ${t.record_id}  ${t.status || 'error'}  ${t.duration_ms}ms  ${t.error ?? (t.response_body ?? '').slice(0, 80)}`)
+    })
+    const a = res.analysis
+    if (a) {
+      lines.push('')
+      lines.push('SUMMARY')
+      lines.push('────────')
+      lines.push(a.summary ?? '')
+      lines.push('')
+      if (a.findings?.length) {
+        lines.push('FINDINGS')
+        lines.push('────────')
+        a.findings.forEach((f) => {
+          lines.push(`[${(f.severity ?? '').toUpperCase()}] ${f.title ?? ''}`)
+          lines.push(`  ${f.description ?? ''}`)
+        })
+        lines.push('')
+      }
+      if (a.test_cases?.length) {
+        lines.push('TEST CASES')
+        lines.push('──────────')
+        a.test_cases.forEach((tc) => {
+          lines.push(`${tc.id ?? '—'} [${(tc.status ?? '').toUpperCase()}] ${tc.title ?? ''}`)
+          lines.push(`  Scenario: ${tc.scenario ?? ''}`)
+          lines.push(`  Expected: ${tc.expected_result ?? ''}`)
+          lines.push(`  Actual: ${tc.actual_result ?? ''}`)
+        })
+        lines.push('')
+      }
+      if (a.recommended_fixes?.length) {
+        lines.push('RECOMMENDED FIXES')
+        lines.push('─────────────────')
+        a.recommended_fixes.forEach((r) => {
+          lines.push(`${r.priority ?? ''}. ${r.fix ?? ''}`)
+          lines.push(`   ${r.rationale ?? ''}`)
+        })
+      }
+      if (a.chaos_findings) {
+        lines.push('')
+        lines.push('CHAOS FINDINGS')
+        lines.push('──────────────')
+        lines.push(a.chaos_findings)
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const blobUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = blobUrl
+    anchor.download = `endpoint-test-${new Date().toISOString().slice(0, 10)}.txt`
+    anchor.click()
+    URL.revokeObjectURL(blobUrl)
   }
 
   function handleSaveTemplate() {
@@ -694,6 +1056,7 @@ const Chatbot: React.FC = () => {
       setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
       setSandboxUrl(result.sandbox_id)
+      if (result.memory) setMemoryIndicator(result.memory)
       setStatusMessage(`Template launched: ${template.name}`)
       setPreviousPrompts((current) => [
         { prompt: template.description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
@@ -742,6 +1105,8 @@ const Chatbot: React.FC = () => {
     setChangedFeatureFlags([])
     setIsTemplateFormOpen(false)
     setTemplateName('')
+    setTimeRemaining(null)
+    setSelectedViewingUserId('')
     clearSandboxUrl()
   }
 
@@ -845,8 +1210,62 @@ const Chatbot: React.FC = () => {
               )}
             </ul>
           </div>
+
+          <div className="reports-section">
+            <h3>Reports</h3>
+            <ul className="history-list">
+              {sessionReports.length === 0 ? (
+                <li className="history-empty">QA reports from this session will appear here.</li>
+              ) : (
+                sessionReports.map((item) => (
+                  <li key={item.report_id} className="history-item">
+                    <button
+                      type="button"
+                      className="history-button"
+                      onClick={() => handleOpenReport(item)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                      </svg>
+                      <span className="history-text">
+                        {item.report.report_title ?? `Report — ${item.chaos_type}`}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
         </div>
 
+        <div className="sidebar-footer">
+          <div className="memory-indicator">
+            <div className="memory-indicator-title">SESSION MEMORY</div>
+            {memoryIndicator ? (
+              <>
+                <div className="memory-indicator-status">
+                  <span className="memory-dot" />
+                  {memoryIndicator.backend === 'moorcheh'
+                    ? 'Moorcheh Active'
+                    : `${memoryIndicator.count} scenarios learned`}
+                </div>
+                {memoryIndicator.lastScenario ? (
+                  <div className="memory-indicator-last">
+                    Last: {memoryIndicator.lastScenario.slice(0, 32)}{memoryIndicator.lastScenario.length > 32 ? '…' : ''}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="memory-indicator-status">
+                <span className="memory-dot" />
+                Supabase Memory
+              </div>
+            )}
+          </div>
         {/* Mobile-only tools in the sidebar */}
         <div className="sidebar-footer mobile-only" style={{ flexDirection: 'column', gap: '8px', padding: '16px', borderTop: '1px solid var(--glass-border)', background: 'rgba(255, 255, 255, 0.02)' }}>
           <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px', wordBreak: 'break-all' }}>
@@ -900,7 +1319,7 @@ const Chatbot: React.FC = () => {
         </div>
       </aside>
 
-      <main className="chat-main">
+      <main className={`chat-main ${expiredSandboxMessage && !sandboxData ? 'chat-main-expired' : ''}`}>
         <header className="chat-header glass">
           <div className="chat-header-copy">
             <div className="header-title-row">
@@ -928,6 +1347,34 @@ const Chatbot: React.FC = () => {
                 {isCopyLinkSuccess ? 'Copied!' : 'Copy Link'}
               </button>
             </div>
+            {sandbox?.expires_at ? (
+              <span className={`expiry-indicator ${timeRemaining === 'Expired' ? 'expired' : ''}`}>
+                {timeRemaining === 'Expired' ? 'Expired' : `Expires in: ${timeRemaining}`}
+              </span>
+            ) : null}
+            {sandboxData && selectedViewingUser ? (
+              <div className="viewing-controls">
+                <label className="viewing-label" htmlFor="viewing-user-select">
+                  Viewing as:
+                </label>
+                <select
+                  id="viewing-user-select"
+                  className="viewing-select"
+                  value={selectedViewingUserId}
+                  onChange={(event) => setSelectedViewingUserId(event.target.value)}
+                >
+                  {viewingUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {`${user.name} (${user.role})`}
+                    </option>
+                  ))}
+                </select>
+                <span className={`role-badge ${currentPermissionTier}`}>{capitalizeLabel(currentViewingRole)}</span>
+                {chaosHighlights && currentPermissionTier !== 'admin' ? (
+                  <span className="role-alert-badge">Anomaly detected</span>
+                ) : null}
+              </div>
+            ) : null}
             {chaosIndicator ? <span className="chaos-indicator">{chaosIndicator}</span> : null}
             {statusMessage ? <span className="status-indicator">{statusMessage}</span> : null}
           </div>
@@ -940,6 +1387,23 @@ const Chatbot: React.FC = () => {
             >
               {isApplyingChaos ? 'Injecting...' : 'Chaos'}
             </button>
+            {chaosHighlights && sandbox ? (
+              <button
+                type="button"
+                className="header-action-btn qa-report-btn"
+                onClick={() => void handleGenerateReport()}
+                disabled={isGeneratingReport || !sandbox}
+              >
+                {isGeneratingReport ? (
+                  <>
+                    <span className="report-btn-spinner" aria-hidden="true" />
+                    Analyzing edge case...
+                  </>
+                ) : (
+                  'Generate QA Report'
+                )}
+              </button>
+            ) : null}
             {isTemplateFormOpen ? (
               <div className="template-inline-form">
                 <input
@@ -1041,19 +1505,27 @@ const Chatbot: React.FC = () => {
 
                 <div className="tab-row">
                   {[
-                    { id: 'users' as const, label: 'Users' },
-                    { id: 'primary_entities' as const, label: primaryEntityTabLabel },
-                    { id: 'activity_logs' as const, label: 'Activity Logs' },
-                    { id: 'feature_flags' as const, label: 'Feature Flags' },
-                  ].map((tab) => (
+                    { id: 'users' as const, label: 'Users', hidden: false },
+                    { id: 'primary_entities' as const, label: primaryEntityTabLabel, hidden: false },
+                    { id: 'activity_logs' as const, label: 'Activity Logs', hidden: currentPermissionTier === 'restricted' },
+                    { id: 'feature_flags' as const, label: 'Feature Flags', hidden: false },
+                    { id: 'endpoint_tester' as const, label: 'Endpoint Tester', hidden: false },
+                  ]
+                    .filter((tab) => !tab.hidden)
+                    .map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
                       className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
                       onClick={() => setActiveTab(tab.id)}
                     >
+                      {tab.id === 'endpoint_tester' ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="tab-icon">
+                          <path d="M10 2v7.31" /><path d="M14 9.3V2" /><path d="M8.5 2h7" /><path d="M14 9.3a6 6 0 1 1-4 11.2" /><path d="M10 9.3a6 6 0 0 0 4 11.2" />
+                        </svg>
+                      ) : null}
                       <span className="tab-label">{tab.label}</span>
-                      {tabChangeCounts[tab.id] > 0 ? (
+                      {tab.id !== 'endpoint_tester' && tabChangeCounts[tab.id] > 0 ? (
                         <span className="tab-badge">{tabChangeCounts[tab.id]}</span>
                       ) : null}
                     </button>
@@ -1061,20 +1533,236 @@ const Chatbot: React.FC = () => {
                 </div>
               </div>
 
-              {chaosHighlights ? (
+              {chaosHighlights && !isChaosBannerDismissed && activeTab !== 'endpoint_tester' ? (
                 <div className="chaos-banner">
-                  {`${chaosHighlights.chaosSummary} — ${chaosHighlights.totalChanges} changes across ${chaosHighlights.changedTabs} tables`}
+                  <span className="chaos-banner-text">
+                    {`${chaosHighlights.chaosSummary} — ${chaosHighlights.totalChanges} changes across ${chaosHighlights.changedTabs} tables`}
+                  </span>
+                  <button
+                    type="button"
+                    className="chaos-banner-dismiss"
+                    onClick={() => setIsChaosBannerDismissed(true)}
+                    aria-label="Dismiss chaos banner"
+                  >
+                    ×
+                  </button>
                 </div>
               ) : null}
 
-              <div className="table-shell glass">
-                <div key={activeTab} className="table-fade-panel">
-                  {activeTable}
+              {activeTab === 'endpoint_tester' ? (
+                <div className="endpoint-tester-panel glass">
+                  <div className="endpoint-tester-scroll">
+                    <div className="endpoint-tester-header">
+                      <h3 className="endpoint-tester-title">ENDPOINT TESTER</h3>
+                      <div className="endpoint-tester-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                    </div>
+                    <div className="endpoint-tester-form">
+                    <div className="endpoint-form-row">
+                      <label className="endpoint-label">Target URL</label>
+                      <div className="endpoint-url-row">
+                        <input
+                          type="url"
+                          className="endpoint-input"
+                          placeholder="http://localhost:4000/api/your-endpoint"
+                          value={endpointTargetUrl}
+                          onChange={(e) => setEndpointTargetUrl(e.target.value)}
+                          disabled={isRunningEndpointTest}
+                        />
+                        <button
+                          type="button"
+                          className="endpoint-btn demo-endpoint"
+                          onClick={() => setEndpointTargetUrl('http://localhost:3001/api/mock-endpoint')}
+                          disabled={isRunningEndpointTest}
+                          title="Use the built-in demo endpoint for realistic mixed results (200s, 400s, 402s, 403s, 500s)"
+                        >
+                          Use Demo Endpoint
+                        </button>
+                      </div>
+                    </div>
+                    <div className="endpoint-form-row endpoint-form-inline">
+                      <div className="endpoint-field">
+                        <label className="endpoint-label">Method</label>
+                        <select
+                          className="endpoint-select"
+                          value={endpointMethod}
+                          onChange={(e) => setEndpointMethod(e.target.value as 'GET' | 'POST' | 'PUT' | 'DELETE')}
+                          disabled={isRunningEndpointTest}
+                        >
+                          <option value="GET">GET</option>
+                          <option value="POST">POST</option>
+                          <option value="PUT">PUT</option>
+                          <option value="DELETE">DELETE</option>
+                        </select>
+                      </div>
+                      <div className="endpoint-field">
+                        <label className="endpoint-label">Entity</label>
+                        <select
+                          className="endpoint-select"
+                          value={endpointEntityType}
+                          onChange={(e) => setEndpointEntityType(e.target.value as 'users' | 'primary_entities' | 'activity_logs')}
+                          disabled={isRunningEndpointTest}
+                        >
+                          <option value="users">Users</option>
+                          <option value="primary_entities">
+                            {sandboxData?.schema_info?.primary_entity_name ? capitalizeLabel(sandboxData.schema_info.primary_entity_name) : 'Records'}
+                          </option>
+                          <option value="activity_logs">Activity Logs</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="endpoint-form-row endpoint-form-checkbox">
+                      <label className="endpoint-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={injectChaos}
+                          onChange={(e) => setInjectChaos(e.target.checked)}
+                          disabled={isRunningEndpointTest}
+                        />
+                        <span>Inject Chaos — test with edge case data</span>
+                      </label>
+                    </div>
+                    <div className="endpoint-form-actions">
+                      <button
+                        type="button"
+                        className="endpoint-btn primary"
+                        onClick={() => void handleRunEndpointTest(false)}
+                        disabled={!sandbox || isRunningEndpointTest}
+                      >
+                        Run Tests
+                      </button>
+                      <button
+                        type="button"
+                        className="endpoint-btn chaos-shortcut"
+                        onClick={() => void handleRunEndpointTest(true)}
+                        disabled={!sandbox || isRunningEndpointTest}
+                      >
+                        Run with Chaos
+                      </button>
+                      {endpointLastResponse ? (
+                        <button
+                          type="button"
+                          className="endpoint-btn secondary"
+                          onClick={handleDownloadEndpointReport}
+                        >
+                          Download Report
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                    {endpointError ? (
+                      <div className="endpoint-error">{endpointError}</div>
+                    ) : null}
+                    <div ref={endpointResultsRef}>
+                    {(isRunningEndpointTest || endpointDisplayedResults.length > 0 || endpointLastResponse) ? (
+                    <div className="endpoint-live-feed">
+                      <div className="endpoint-feed-header">
+                        {isRunningEndpointTest ? (
+                          <>→ Firing requests at {endpointTargetUrl || '…'}...</>
+                        ) : endpointLastResponse ? (
+                          <>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</>
+                        ) : null}
+                      </div>
+                      {endpointDisplayedResults.map((r, i) => (
+                        <div key={`${r.record_id}-${i}`} className={`endpoint-feed-line ${r.ok ? 'pass' : 'fail'}`}>
+                          {r.ok ? '✓' : '✗'} {r.record_id}  {r.status || 'timeout'} {r.status ? (r.ok ? 'OK' : 'Error') : ''}  ({r.duration_ms}ms)
+                        </div>
+                      ))}
+                      {endpointLastResponse && !isRunningEndpointTest && endpointDisplayedResults.length === endpointLastResponse.test_results.length ? (
+                        <div className="endpoint-feed-summary">
+                          {endpointLastResponse.passed} passed  {endpointLastResponse.failed} failed
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                    {endpointLastResponse && !isRunningEndpointTest ? (
+                    <div className="endpoint-report-panel">
+                      {(() => {
+                        const a = endpointLastResponse.analysis
+                        if (!a) return null
+                        return (
+                          <>
+                            {a.summary ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Summary</h4>
+                                <p className="endpoint-report-summary">{a.summary}</p>
+                              </section>
+                            ) : null}
+                            <section className="endpoint-report-section">
+                              <h4 className="endpoint-report-section-title">Pass / Fail</h4>
+                              <div className="endpoint-stats-bar">
+                                <span className="endpoint-stats-pass" style={{ width: `${endpointLastResponse.total ? (endpointLastResponse.passed / endpointLastResponse.total) * 100 : 0}%` }} />
+                                <span className="endpoint-stats-fail" style={{ width: `${endpointLastResponse.total ? (endpointLastResponse.failed / endpointLastResponse.total) * 100 : 0}%` }} />
+                              </div>
+                              <p className="endpoint-stats-text">{endpointLastResponse.passed} passed, {endpointLastResponse.failed} failed (avg {a.avg_response_time_ms ?? 0}ms)</p>
+                            </section>
+                            {a.findings?.length ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Findings</h4>
+                                <div className="endpoint-findings-list">
+                                  {a.findings.map((f, i) => (
+                                    <div key={i} className="endpoint-finding-card">
+                                      <span className={`endpoint-severity-badge severity-${(f.severity ?? 'info').toLowerCase()}`}>{(f.severity ?? 'info').toUpperCase()}</span>
+                                      <strong>{f.title ?? '—'}</strong>
+                                      <p>{f.description ?? ''}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </section>
+                            ) : null}
+                            {a.test_cases?.length ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Test Cases</h4>
+                                <div className="endpoint-test-cases-list">
+                                  {a.test_cases.map((tc, i) => (
+                                    <div key={i} className="endpoint-tc-card">
+                                      <div className="endpoint-tc-header">
+                                        <span className="endpoint-tc-id">{tc.id ?? `TC-${String(i + 1).padStart(3, '0')}`}</span>
+                                        <span className={`endpoint-tc-status ${(tc.status ?? 'warning').toLowerCase()}`}>{(tc.status ?? 'warning').toUpperCase()}</span>
+                                        <span className="endpoint-tc-priority">{(tc.priority ?? 'medium').toUpperCase()}</span>
+                                      </div>
+                                      <p className="endpoint-tc-title">{tc.title ?? '—'}</p>
+                                      <p className="endpoint-tc-scenario">{tc.scenario ?? '—'}</p>
+                                      <p className="endpoint-tc-expected">Expected: {tc.expected_result ?? '—'}</p>
+                                      <p className="endpoint-tc-actual">Actual: {tc.actual_result ?? '—'}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </section>
+                            ) : null}
+                            {a.recommended_fixes?.length ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Recommended Fixes</h4>
+                                <ol className="endpoint-fixes-list">
+                                  {a.recommended_fixes.map((r, i) => (
+                                    <li key={i}><strong>{r.priority ?? i + 1}. {r.fix ?? '—'}</strong> {r.rationale ?? ''}</li>
+                                  ))}
+                                </ol>
+                              </section>
+                            ) : null}
+                            {a.chaos_findings ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Chaos Findings</h4>
+                                <p className="endpoint-chaos-findings">{a.chaos_findings}</p>
+                              </section>
+                            ) : null}
+                          </>
+                        )
+                      })()}
+                    </div>
+                    ) : null}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="table-shell glass">
+                  <div key={activeTab} className="table-fade-panel">
+                    {activeTable}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
-            <div className="empty-state">
+            <div className={`empty-state ${expiredSandboxMessage ? 'expired-state' : ''}`}>
               <div className="empty-icon glass">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
@@ -1087,6 +1775,11 @@ const Chatbot: React.FC = () => {
                   : 'Describe the demo or QA environment you want to generate, then inspect the resulting entities in structured tabs.'}
               </p>
               {errorMessage ? <div className="workspace-alert error compact">{errorMessage}</div> : null}
+              {expiredSandboxMessage ? (
+                <button type="button" className="new-chat-btn expired-reset-btn" onClick={handleReset}>
+                  Create New Sandbox
+                </button>
+              ) : null}
               <div className="example-grid">
                 {examplePrompts.map((prompt, index) => (
                   <button
@@ -1136,6 +1829,122 @@ const Chatbot: React.FC = () => {
           <p className="input-footer">SceneForge can make mistakes. Verify test data before production simulations.</p>
         </div>
       </main>
+
+      {/* QA Report Modal */}
+      {reportModalOpen && reportModalContent && (
+        <div className="report-overlay" onClick={() => setReportModalOpen(false)}>
+          <div
+            className="report-panel"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="report-panel-title"
+          >
+            <header className="report-panel-header">
+              <div className="report-panel-title-row">
+                <h2 id="report-panel-title" className="report-panel-title">QA EDGE CASE REPORT</h2>
+                <div className="report-panel-actions">
+                  <button type="button" className="report-panel-btn download" onClick={handleDownloadReport}>
+                    Download Report
+                  </button>
+                  <button type="button" className="report-panel-btn close" onClick={() => setReportModalOpen(false)}>
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="report-panel-meta">
+                <span>Generated: {reportModalContent.generated_at ? new Date(reportModalContent.generated_at).toLocaleString() : '—'}</span>
+                <span>Chaos: {reportModalContent.chaos_type ?? '—'}</span>
+              </div>
+              <div className="report-panel-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+            </header>
+            <div className="report-panel-body">
+              {reportModalContent.executive_summary ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Executive Summary</h3>
+                  <p className="report-executive-summary">{reportModalContent.executive_summary}</p>
+                </section>
+              ) : null}
+              {reportModalContent.what_happened && reportModalContent.what_happened.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">What Happened</h3>
+                  <ol className="report-list">
+                    {reportModalContent.what_happened.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+              {reportModalContent.vulnerabilities && reportModalContent.vulnerabilities.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Vulnerabilities</h3>
+                  <div className="report-cards">
+                    {reportModalContent.vulnerabilities.map((v, i) => (
+                      <div key={i} className="report-card">
+                        <span className={`report-severity-badge severity-${(v.severity ?? 'medium').toLowerCase()}`}>
+                          {(v.severity ?? 'medium').toUpperCase()}
+                        </span>
+                        <strong>{v.title ?? '—'}</strong>
+                        <p>{v.description ?? ''}</p>
+                        {v.affected_component ? <span className="report-affected">Affected: {v.affected_component}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {reportModalContent.affected_systems && reportModalContent.affected_systems.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Affected Systems</h3>
+                  <div className="report-cards">
+                    {reportModalContent.affected_systems.map((a, i) => (
+                      <div key={i} className="report-card">
+                        <span className={`report-impact-badge impact-${(a.impact ?? 'medium').toLowerCase()}`}>
+                          {(a.impact ?? 'medium').toUpperCase()}
+                        </span>
+                        <strong>{a.system ?? '—'}</strong>
+                        <p>{a.details ?? ''}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {reportModalContent.test_cases && reportModalContent.test_cases.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Test Cases</h3>
+                  <div className="report-test-cases">
+                    {reportModalContent.test_cases.map((tc, i) => (
+                      <div key={i} className="report-test-case">
+                        <div className="report-test-case-header">
+                          <span className="report-test-case-id">{tc.id ?? `TC-${String(i + 1).padStart(3, '0')}`}</span>
+                          <span className={`report-priority-badge priority-${(tc.priority ?? 'medium').toLowerCase()}`}>
+                            {(tc.priority ?? 'medium').toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="report-test-case-divider">────────────────</div>
+                        <p className="report-test-case-title"><strong>Title:</strong> {tc.title ?? '—'}</p>
+                        <p className="report-test-case-scenario"><strong>Scenario:</strong> {tc.scenario ?? '—'}</p>
+                        <p className="report-test-case-expected"><strong>Expected:</strong> {tc.expected_result ?? '—'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {reportModalContent.recommended_fixes && reportModalContent.recommended_fixes.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Recommended Fixes</h3>
+                  <ol className="report-fixes-list">
+                    {reportModalContent.recommended_fixes.map((r, i) => (
+                      <li key={i}>
+                        <strong>{r.priority ?? i + 1}. {r.fix ?? '—'}</strong>
+                        {r.rationale ? <p>{r.rationale}</p> : null}
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Databases Modal */}
       {isDbModalOpen && (
