@@ -36,7 +36,7 @@ const Hero: React.FC = () => {
           </div>
           <div className="stat-item">
             <span className="stat-number">3+</span>
-            <span className="stat-label">Chaos Types</span>
+            <span className="stat-label">Live API Endpoint Testing</span>
           </div>
           <div className="stat-item">
             <span className="stat-number">100%</span>
