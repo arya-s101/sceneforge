@@ -19,7 +19,8 @@ import { supabase } from './lib/supabase.ts'
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '')
-const genModel = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' })
+const flashModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
+const proModel = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' })
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
 function stripJsonFromMarkdown(text: string): string {
@@ -478,7 +479,7 @@ async function requestModelJson(
   model: 'flash' | 'pro' = 'flash',
 ): Promise<string> {
   ensureEnv('GEMINI_API_KEY')
-  const modelInstance = genModel
+  const modelInstance = model === 'pro' ? proModel : flashModel
   const fullPrompt = `${systemPrompt}\n\n${prompt}`
   const result = await modelInstance.generateContent(fullPrompt)
   const text = result.response.text()?.trim() ?? ''
@@ -804,7 +805,7 @@ app.post(
       'Return only raw JSON.',
     ].join('\n\n')
 
-    const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
+    const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt, 'flash')
     const diff = parseChaosDiff(rawJson)
     const { mutatedData, changedIds, chaos_summary } = applyChaosDiff(sandbox.data, diff)
 
