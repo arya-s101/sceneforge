@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors'
 import OpenAI from 'openai'
 
+import { getMemoryStatus, retrieveMemory, storeMemory, type StoreMemoryResult } from './lib/memory.ts'
 import {
   createSandboxRecord,
   createTemplateRecord,
@@ -434,12 +435,16 @@ async function getTemplateById(id: string): Promise<TemplateRow> {
   return data as TemplateRow
 }
 
-async function generateFreshSandbox(description: string) {
-  const memory = await getMemoryRecord()
+async function generateFreshSandbox(
+  description: string,
+  memoryContext?: string,
+): Promise<{ sandbox: SandboxRow; memoryResult?: StoreMemoryResult }> {
+  const promptWithMemory = memoryContext
+    ? `${memoryContext}\n\nNow generate a new sandbox for: ${description}`
+    : description
   const prompt = [
-    `Product context: ${memory?.product_context ?? DEFAULT_PRODUCT_CONTEXT}`,
-    `Past scenarios: ${JSON.stringify(memory?.past_scenarios ?? [])}`,
-    `Requested scenario: ${description}`,
+    `Product context: ${DEFAULT_PRODUCT_CONTEXT}`,
+    `Requested scenario: ${promptWithMemory}`,
     'Return only raw JSON.',
   ].join('\n\n')
 
@@ -452,9 +457,17 @@ async function generateFreshSandbox(description: string) {
     throw error
   }
 
-  await appendScenarioToMemory(description)
+  const memoryResult = await storeMemory({
+    description,
+    domain: data.schema_info?.domain ?? 'unknown',
+    schema: {
+      primary_entity: data.schema_info?.primary_entity_name,
+      fields: Object.keys((data.primary_entities ?? [])[0] ?? {}),
+    },
+    metrics: data.dashboard_metrics ?? {},
+  })
 
-  return sandbox
+  return { sandbox, memoryResult }
 }
 
 async function requestModelJson(systemPrompt: string, prompt: string): Promise<string> {
@@ -672,13 +685,30 @@ app.post(
     }
 
     ensureSupabaseEnv()
-    const sandbox = await generateFreshSandbox(description)
+    const memoryContext = await retrieveMemory(description)
+    const { sandbox, memoryResult } = await generateFreshSandbox(description, memoryContext)
 
     response.status(201).json({
       sandbox_id: sandbox.id,
       data: sandbox.data,
       expires_at: sandbox.expires_at,
+      memory: memoryResult
+        ? {
+            backend: memoryResult.backend,
+            count: memoryResult.count,
+            lastScenario: memoryResult.lastDescription,
+          }
+        : undefined,
     })
+  }),
+)
+
+app.get(
+  '/api/memory-status',
+  asyncRoute(async (_request, response) => {
+    ensureSupabaseEnv()
+    const status = await getMemoryStatus()
+    response.json(status)
   }),
 )
 
@@ -735,12 +765,20 @@ app.post(
 
     ensureSupabaseEnv()
     const template = await getTemplateById(templateId)
-    const sandbox = await generateFreshSandbox(template.description)
+    const memoryContext = await retrieveMemory(template.description)
+    const { sandbox, memoryResult } = await generateFreshSandbox(template.description, memoryContext)
 
     response.status(201).json({
       sandbox_id: sandbox.id,
       data: sandbox.data,
       expires_at: sandbox.expires_at,
+      memory: memoryResult
+        ? {
+            backend: memoryResult.backend,
+            count: memoryResult.count,
+            lastScenario: memoryResult.lastDescription,
+          }
+        : undefined,
     })
   }),
 )

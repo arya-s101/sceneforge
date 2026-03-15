@@ -6,6 +6,7 @@ import {
   generateFromTemplate,
   generateReport,
   generateSandbox,
+  getMemoryStatus,
   getSandbox,
   getSandboxes,
   getTemplates,
@@ -14,6 +15,7 @@ import {
   type ActivityLogRecord,
   type EndpointTestRecordResult,
   type EndpointTestResponse,
+  type MemoryIndicator,
   type PrimaryEntityRecord,
   type QAReport,
   type SandboxSummary,
@@ -440,6 +442,7 @@ const Chatbot: React.FC = () => {
   const [endpointLastResponse, setEndpointLastResponse] = useState<EndpointTestResponse | null>(null)
   const [endpointDisplayedResults, setEndpointDisplayedResults] = useState<EndpointTestRecordResult[]>([])
   const [endpointError, setEndpointError] = useState<string | null>(null)
+  const [memoryIndicator, setMemoryIndicator] = useState<MemoryIndicator | null>(null)
   const endpointResultsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -535,6 +538,12 @@ const Chatbot: React.FC = () => {
   useEffect(() => {
     void loadSidebarData()
   }, [loadSidebarData])
+
+  useEffect(() => {
+    getMemoryStatus()
+      .then(setMemoryIndicator)
+      .catch(() => setMemoryIndicator(null))
+  }, [])
 
   const restoreSandbox = useCallback(
     async (sandboxId: string, promptText?: string) => {
@@ -721,6 +730,7 @@ const Chatbot: React.FC = () => {
       setSandbox(result)
       setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
+      if (result.memory) setMemoryIndicator(result.memory)
       setPreviousPrompts((current) => [
         { prompt: description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
         ...current.filter((item) => item.sandbox_id !== result.sandbox_id),
@@ -1045,6 +1055,7 @@ const Chatbot: React.FC = () => {
       setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
       setSandboxUrl(result.sandbox_id)
+      if (result.memory) setMemoryIndicator(result.memory)
       setStatusMessage(`Template launched: ${template.name}`)
       setPreviousPrompts((current) => [
         { prompt: template.description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
@@ -1227,14 +1238,29 @@ const Chatbot: React.FC = () => {
         </div>
 
         <div className="sidebar-footer">
-          <button type="button" className="view-db-btn" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-            </svg>
-            Session Memory Ready
-          </button>
+          <div className="memory-indicator">
+            <div className="memory-indicator-title">SESSION MEMORY</div>
+            {memoryIndicator ? (
+              <>
+                <div className="memory-indicator-status">
+                  <span className="memory-dot" />
+                  {memoryIndicator.backend === 'moorcheh'
+                    ? 'Moorcheh Active'
+                    : `${memoryIndicator.count} scenarios learned`}
+                </div>
+                {memoryIndicator.lastScenario ? (
+                  <div className="memory-indicator-last">
+                    Last: {memoryIndicator.lastScenario.slice(0, 32)}{memoryIndicator.lastScenario.length > 32 ? '…' : ''}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="memory-indicator-status">
+                <span className="memory-dot" />
+                Supabase Memory
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 

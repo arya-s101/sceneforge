@@ -41,10 +41,17 @@ export type SandboxData = {
   }
 }
 
+export type MemoryIndicator = {
+  backend: 'moorcheh' | 'supabase'
+  count: number
+  lastScenario: string
+}
+
 export type SandboxResponse = {
   sandbox_id: string
   data: SandboxData
   expires_at: string
+  memory?: MemoryIndicator
 }
 
 export type TemplateSummary = {
@@ -268,6 +275,10 @@ export function testEndpoint(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function getMemoryStatus() {
+  return apiRequest<MemoryIndicator>('/api/memory-status')
 }
 
 export function getSandbox(sandboxId: string) {
