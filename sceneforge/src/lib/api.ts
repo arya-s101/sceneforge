@@ -109,7 +109,8 @@ export type ReportResponse = {
   report: QAReport
 }
 
-// In dev always use relative URL so Vite proxy sends /api to the backend. In prod use env or default.
+// Base URL for API: in dev use '' so requests go to same origin and Vite proxy forwards /api to http://localhost:3001.
+// In prod use VITE_API_URL or fallback to http://localhost:3001. All paths are relative (e.g. /api/report).
 const API_URL = import.meta.dev
   ? ''
   : (typeof import.meta.env.VITE_API_URL === 'string' && import.meta.env.VITE_API_URL.trim()) || 'http://localhost:3001'

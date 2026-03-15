@@ -6,6 +6,7 @@ export default defineConfig({
   envDir: 'src',
   plugins: [react()],
   server: {
+    // Forward /api/* to the backend at http://localhost:3001
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
