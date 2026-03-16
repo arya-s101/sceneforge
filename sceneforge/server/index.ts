@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
-import OpenAI from 'openai'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 import { getMemoryStatus, retrieveMemory, storeMemory, type StoreMemoryResult } from './lib/memory.ts'
 import {
@@ -18,8 +18,17 @@ import { supabase } from './lib/supabase.ts'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
-const MODEL = 'gpt-4o'
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '')
+const flashModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
+const proModel = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' })
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
+
+function stripJsonFromMarkdown(text: string): string {
+  const trimmed = text.trim()
+  const jsonBlock = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i
+  const match = trimmed.match(jsonBlock)
+  return match ? match[1].trim() : trimmed
+}
 
 const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON.
 
@@ -352,12 +361,6 @@ function ensureSupabaseEnv(): void {
   ensureEnv('SUPABASE_ANON_KEY')
 }
 
-function getOpenAIClient() {
-  return new OpenAI({
-    apiKey: ensureEnv('OPENAI_API_KEY'),
-  })
-}
-
 async function getMemoryRecord(): Promise<MemoryRow | null> {
   const { data, error } = await supabase
     .from('memory')
@@ -448,7 +451,7 @@ async function generateFreshSandbox(
     'Return only raw JSON.',
   ].join('\n\n')
 
-  const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt)
+  const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt, 'flash')
   const data = parseSandboxPayload(rawJson)
   const sandbox = createSandboxRecord(description, data)
 
@@ -470,25 +473,22 @@ async function generateFreshSandbox(
   return { sandbox, memoryResult }
 }
 
-async function requestModelJson(systemPrompt: string, prompt: string): Promise<string> {
-  const openai = getOpenAIClient()
-  const response = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      {
-        role: 'user',
-        content: `${systemPrompt}\n\n${prompt}`,
-      },
-    ],
-    response_format: { type: 'json_object' },
-  })
-  const text = response.choices[0]?.message?.content?.trim()
+async function requestModelJson(
+  systemPrompt: string,
+  prompt: string,
+  model: 'flash' | 'pro' = 'flash',
+): Promise<string> {
+  ensureEnv('GEMINI_API_KEY')
+  const modelInstance = model === 'pro' ? proModel : flashModel
+  const fullPrompt = `${systemPrompt}\n\n${prompt}`
+  const result = await modelInstance.generateContent(fullPrompt)
+  const text = result.response.text()?.trim() ?? ''
 
   if (!text) {
-    throw new Error('OpenAI returned an empty response.')
+    throw new Error('Gemini returned an empty response.')
   }
 
-  return text
+  return stripJsonFromMarkdown(text)
 }
 
 function parseChaosDiff(rawText: string): ChaosDiff {
@@ -807,7 +807,7 @@ app.post(
       'Return only raw JSON.',
     ].join('\n\n')
 
-    const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
+    const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt, 'flash')
     const diff = parseChaosDiff(rawJson)
     const { mutatedData, changedIds, chaos_summary } = applyChaosDiff(sandbox.data, diff)
 
@@ -868,9 +868,9 @@ app.post(
 
     let rawJson: string
     try {
-      rawJson = await requestModelJson(QA_REPORT_SYSTEM_PROMPT, prompt)
-    } catch (openaiError) {
-      const msg = getErrorMessage(openaiError)
+      rawJson = await requestModelJson(QA_REPORT_SYSTEM_PROMPT, prompt, 'pro')
+    } catch (reportError) {
+      const msg = getErrorMessage(reportError)
       response.status(502).json({ error: `QA report generation failed: ${msg}` })
       return
     }
@@ -990,7 +990,7 @@ app.post(
         `Current sandbox data: ${JSON.stringify(sandbox.data)}`,
         'Return only raw JSON.',
       ].join('\n\n')
-      const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
+      const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt, 'flash')
       const diff = parseChaosDiff(rawJson)
       const { mutatedData } = applyChaosDiff(sandbox.data, diff)
       dataToUse = mutatedData
@@ -1075,7 +1075,7 @@ app.post(
         '',
         'Return only valid JSON.',
       ].join('\n')
-      const rawAnalysis = await requestModelJson(ENDPOINT_TEST_ANALYSIS_PROMPT, analysisPrompt)
+      const rawAnalysis = await requestModelJson(ENDPOINT_TEST_ANALYSIS_PROMPT, analysisPrompt, 'pro')
       analysis = JSON.parse(rawAnalysis.trim()) as EndpointTestAnalysisPayload
     } catch {
       analysis = {
